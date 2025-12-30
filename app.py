@@ -18,7 +18,7 @@ from google import genai as genai_client_lib
 from google.genai import types
 from dotenv import load_dotenv
 from PIL import Image
-import concurrent.futures
+
 import json
 import io
 import pickle
@@ -99,69 +99,7 @@ SAFETY_SETTINGS = [
 ]
 
 # ---------------------------------------------------------
-# BATCH GENERATION HELPERS
-# ---------------------------------------------------------
-def generate_draft_task(shot, cast_roster, style_dna):
-    """
-    Generates a generic Draft Sketch for a single shot.
-    Returns: PIL Image or None on failure.
-    """
-    try:
-        inputs = ["TASK: ROUGH BLUE PENCIL SKETCH.\n"]
-        
-        # Add Style
-        if style_dna: # Check if style exists
-             inputs.append("STYLE REFERENCE:")
-             inputs.append(style_dna)
-        else:
-             inputs.append("STYLE: loose professional storyboard sketch, blue pencil, white background.")
 
-        # Construct Prompt
-        char_prompt = ""
-        # We don't have per-shot cast selection in batch mode easily without complexity.
-        # We will use the 'shot["characters"]' text if we parsed it, or just the action.
-        # Ideally, we dump the WHOLE cast roster into context or a generic list.
-        # For simplicity in Lite: We just append the full cast roster context if small.
-        if cast_roster:
-            inputs.append("CAST ROSTER:")
-            for char in cast_roster:
-                inputs.append(f"Character: {char['name']}")
-                inputs.append(char['image'])
-                
-        scene_desc = f"SCENE: {shot.get('action', '')}. {shot.get('dialogue', '')}"
-        inputs.append(scene_desc)
-        
-        m = genai.GenerativeModel(DRAFT_MODEL)
-        res = m.generate_content(inputs)
-        return res.parts[0].image
-    except Exception as e:
-        print(f"Draft Gen Error: {e}")
-        return None
-
-def generate_final_task(shot, draft_img, style_dna):
-    """
-    Generates a Final 3D Render from a draft.
-    Returns: PIL Image or None on failure.
-    """
-    try:
-        inputs = ["TASK: FINAL 3D RENDER (PIXAR STYLE).\n"]
-        
-        if style_dna:
-            inputs.append("STYLE REFERENCE:")
-            inputs.append(style_dna)
-            
-        inputs.append("INPUT SKETCH:")
-        inputs.append(draft_img)
-        
-        scene_desc = f"RENDER ACTION: {shot.get('action', '')}."
-        inputs.append(scene_desc)
-        
-        m = genai.GenerativeModel(FINAL_MODEL)
-        res = m.generate_content(inputs)
-        return res.parts[0].image
-    except Exception as e:
-        print(f"Final Gen Error: {e}")
-        return None
 
 # ---------------------------------------------------------
 # SIDEBAR: API KEY & RIGS
@@ -348,62 +286,7 @@ with tab_story:
     # GALLERY
     if st.session_state['shots']:
         st.subheader(f"Shot List ({len(st.session_state['shots'])})")
-        # BATCH TOOLBAR
-        st.markdown("### ⚡ Batch Production")
-        b_col1, b_col2, b_col3 = st.columns([1, 1, 2])
-        
-        with b_col1:
-            if st.button("🖊️ Sketch All Shots", type="primary", use_container_width=True):
-                with st.spinner("Batch Sketching in Parallel..."):
-                    tasks = {}
-                    with concurrent.futures.ThreadPoolExecutor() as executor:
-                        for i, shot in enumerate(st.session_state["shots"]):
-                            # Launch task
-                            args = (shot, st.session_state['roster'], st.session_state.get('sketch_style_dna'))
-                            future = executor.submit(generate_draft_task, *args)
-                            tasks[future] = i
-                        
-                        # Collect results as they complete
-                        for future in concurrent.futures.as_completed(tasks):
-                            idx = tasks[future]
-                            res_img = future.result()
-                            if res_img:
-                                # Update Session State safely (dictionary assignment is thread-safeish in this context)
-                                current_data = st.session_state['generated_images'].get(idx, {})
-                                if not isinstance(current_data, dict): current_data = {'final': current_data} # Legacy fix
-                                current_data['draft'] = res_img
-                                st.session_state['generated_images'][idx] = current_data
-                                
-                    save_project()
-                    st.rerun()
 
-        with b_col2:
-            if st.button("🎬 Render All Finals", type="primary", use_container_width=True):
-                 with st.spinner("Batch Rendering in Parallel..."):
-                    tasks = {}
-                    with concurrent.futures.ThreadPoolExecutor() as executor:
-                        for i, shot in enumerate(st.session_state["shots"]):
-                            # Check existance of scratch
-                            current_data = st.session_state['generated_images'].get(i, {})
-                            if isinstance(current_data, dict) and 'draft' in current_data:
-                                # Launch task
-                                args = (shot, current_data['draft'], st.session_state.get('final_style_dna'))
-                                future = executor.submit(generate_final_task, *args)
-                                tasks[future] = i
-                        
-                        # Collect results
-                        for future in concurrent.futures.as_completed(tasks):
-                            idx = tasks[future]
-                            res_img = future.result()
-                            if res_img:
-                                current_data = st.session_state['generated_images'].get(idx, {})
-                                current_data['final'] = res_img
-                                st.session_state['generated_images'][idx] = current_data
-                                
-                    save_project()
-                    st.rerun()
-                    
-        st.divider()
 
         for i, shot in enumerate(st.session_state["shots"]):
             with st.container():

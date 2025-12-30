@@ -69,7 +69,7 @@ st.set_page_config(page_title="Banana Split Studio", layout="wide", page_icon="�
 load_dotenv()
 env_key = os.getenv("GOOGLE_API_KEY")
 
-# Initialization
+# Session State Init
 if "sketch_style_dna" not in st.session_state:
     st.session_state["sketch_style_dna"] = ""
 if "final_style_dna" not in st.session_state:
@@ -231,15 +231,9 @@ with tab_s2:
                 save_project()
                 st.success("Final Style Locked!")
 
-# ---------------------------------------------------------
-# MAIN: SCRIPT CHUNKING
-# ---------------------------------------------------------
+
 
 st.title("🎬 Storyboard Production")
-
-# ---------------------------------------------------------
-# TABS: STORYBOARD vs FREE RENDER vs FREE VIDEO
-# ---------------------------------------------------------
 
 tab_story, tab_free, tab_video = st.tabs(["🎬 Storyboard Mode", "🎨 Free Render / Revise", "🎥 Free Video Studio"])
 
@@ -310,7 +304,7 @@ with tab_story:
                     if st.button("Draft", key=f"draft_{i}", help="Generate rough sketch"):
                         with st.spinner("Sketching..."):
                             try:
-                                # Dynamic Sketch Style
+                                # Style Configuration
                                 s_style = st.session_state.get('sketch_style_dna', "")
                                 if not s_style: s_style = "Rough blue pencil sketch, loose, dynamic, 2D animation layout."
                                 
@@ -348,7 +342,7 @@ with tab_story:
                     if st.button("Final", key=f"final_{i}", help="Generate final render"):
                         with st.spinner("Rendering..."):
                             try:
-                                # Dynamic Style Logic
+                                # Style Configuration
                                 style_ref = st.session_state.get('final_style_dna', "")
                                 if not style_ref:
                                     style_ref = "3D Pixar Animation Style. Cute, expressive, volumetric lighting, high fidelity CGI."
@@ -446,7 +440,7 @@ with tab_free:
                     try:
                         sketch_img = Image.open(uploaded_sketch).convert("RGB")
                         
-                        # Dynamic Style Logic
+                        # Style Configuration
                         style_ref = st.session_state.get('final_style_dna', "")
                         if not style_ref:
                             style_ref = "3D Pixar Animation Style. Cute, expressive, volumetric lighting, high fidelity CGI."

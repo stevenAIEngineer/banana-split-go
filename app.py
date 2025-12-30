@@ -174,7 +174,6 @@ with st.sidebar.form("new_char_form", clear_on_submit=True):
             try:
                 img = Image.open(c_file).convert("RGB")
                 model = genai.GenerativeModel(ANALYSIS_MODEL)
-                # Analyze physical traits
                 dna_prompt = "Analyze physical traits (species, colors, clothes) for character consistency. Concise."
                 res = model.generate_content([dna_prompt, img])
                 
@@ -243,22 +242,6 @@ tab_story, tab_free, tab_video = st.tabs(["🎬 Storyboard Mode", "🎨 Free Ren
 with tab_story:
     if not st.session_state["shots"]:
         st.info("Paste your script below to convert it into shots.")
-# ... (rest of tab 1 content handled by previous tool calls or preserved by not replacing it)
-# Wait, replace_file_content replaces a contiguous block. I need to be careful not to break the tab structure if I only replace part of it.
-# The tool above replaced up to line 379.
-# The Tabs definition is around line 232.
-# I need to redefine the tabs line first, then append the new tab's content at the end of the file.
-# But `replace_file_content` works on contiguous blocks.
-# Strategy:
-# 1. Edit the line defining tabs (approx line 232).
-# 2. Append the new tab content at the end of the file.
-
-# STEP 1: Update Tab Definition
-# STEP 2: Appending new tab content (after tab_free content).
-
-# I will do this in 2 separate calls if needed, or 1 if I can wrap the whole bottom.
-# But the bottom is huge.
-# Let's split this tool call. Redefine tabs first.
 
 
     with st.expander("📝 Script Editor", expanded=not bool(st.session_state["shots"])):

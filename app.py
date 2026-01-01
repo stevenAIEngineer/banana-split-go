@@ -16,6 +16,7 @@ import json
 import io
 import pickle
 import time
+import base64
 
 # State Persistence
 STATE_FILE = "banana_state.pkl"
@@ -123,11 +124,29 @@ def submit_batch_job(job_type, api_key):
                 model_id = DRAFT_MODEL
 
             elif job_type == "final":
-                 # Text-only description for stability in batch mode
+                 # Use Draft Sketch for fidelity
                  style_ref = st.session_state.get('final_style_dna', "3D Pixar Style.")
-                 prompt_text = f"TASK: FINAL RENDER. STYLE: {style_ref}. SCENE: {shot.get('action', '')}."
+                 prompt_text = f"TASK: FINAL RENDER. STYLE: {style_ref}. Turn this sketch into high fidelity render. SCENE: {shot.get('action', '')}."
+                 
+                 # Check for draft image
+                 current_data = st.session_state['generated_images'].get(i, {})
+                 parts = [{"text": prompt_text}]
+                 
+                 if isinstance(current_data, dict) and 'draft' in current_data:
+                     # Convert Draft to Base64 for JSONL
+                     buf = io.BytesIO()
+                     current_data['draft'].save(buf, format="PNG")
+                     b64_data = base64.b64encode(buf.getvalue()).decode('utf-8')
+                     
+                     parts.append({
+                         "inline_data": {
+                             "mime_type": "image/png",
+                             "data": b64_data
+                         }
+                     })
+                 
                  request_body = {
-                    "contents": [{"parts": [{"text": prompt_text}]}],
+                    "contents": [{"parts": parts}],
                     "generation_config": {"temperature": 0.3}
                  }
                  model_id = FINAL_MODEL
@@ -182,21 +201,92 @@ def check_batch_updates(api_key):
             refresh_job = client.batches.get(name=job_id)
             
             if refresh_job.state == "SUCCEEDED":
-                # Download Results
-                # Placeholder for manual check
-                job_info['status'] = 'COMPLETED (Download Manually)'
-                
-                st.toast(f"Batch {job_id} Completed!", icon="✅")
-                st.session_state["batch_jobs"].remove(job_info)
-                completed_count += 1
-                
+                # Attempt to download results
+                # In new SDK, output_file_name usually points to a 'files/...' resource
+                # We can download it using client.files.content method?
+                # Method might be client.files.get_content? Or client.files.download?
+                # We will try to download the content.
+                try:
+                    # Output file might be in refresh_job.output_file or similar
+                    # Check properties:
+                    output_name = getattr(refresh_job, "output_file", None)
+                    if not output_name:
+                         # Fallback if attribute differs
+                         # Some versions use other fields.
+                         st.warning(f"Batch {job_id} succeeded but output file not found automatically.")
+                         job_info['status'] = 'COMPLETED (Unknown Output)'
+                         continue
+
+                    # Download content (bytes)
+                    # client.files.content returns bytes
+                    file_content = client.files.content(name=output_name)
+                    
+                    # Parse JSONL
+                    # file_content is bytes, decode to string
+                    text_content = file_content.decode("utf-8")
+                    lines = text_content.strip().split("\n")
+                    
+                    success_items = 0
+                    for line in lines:
+                        if not line.strip(): continue
+                        item = json.loads(line)
+                        custom_id = item.get("custom_id", "")
+                        
+                        # Parse ID "sketch_0" -> 0
+                        if "_" in custom_id:
+                            c_type, idx_str = custom_id.split("_")
+                            idx = int(idx_str)
+                            
+                            # Extract Image
+                            # Structure: item['response']['candidates'][0]['content']['parts'][0]['text' or 'inline_data']
+                            # Note: The response inside JSONL matches standard generateContent response
+                            response_pkl = item.get("response", {})
+                            # Usually serialized JSON response
+                            
+                            # We need to dig deep safe-ly
+                            try:
+                                # Candidate 1
+                                cand = response_pkl.get('candidates', [])[0]
+                                parts = cand.get('content', {}).get('parts', [])
+                                
+                                img_data = None
+                                for p in parts:
+                                    # Check for inline_data
+                                    if 'inline_data' in p:
+                                        # Base64 decode
+                                        b64_str = p['inline_data']['data']
+                                        img_bytes = base64.b64decode(b64_str)
+                                        img_data = Image.open(io.BytesIO(img_bytes))
+                                        break
+                                
+                                if img_data:
+                                    # Save to Session
+                                    if idx not in st.session_state['generated_images']: 
+                                        st.session_state['generated_images'][idx] = {}
+                                        
+                                    target_key = "draft" if c_type == "sketch" else "final"
+                                    # Only update if empty or overwrite? Overwrite is expected.
+                                    st.session_state['generated_images'][idx][target_key] = img_data
+                                    success_items += 1
+                                    
+                            except Exception as parse_err:
+                                print(f"Parse error for {custom_id}: {parse_err}")
+
+                    st.toast(f"Batch Completed! {success_items} shots updated.", icon="✅")
+                    st.session_state["batch_jobs"].remove(job_info)
+                    completed_count += 1
+                    
+                except Exception as dl_err:
+                    st.error(f"Download Failed for {job_id}: {dl_err}")
+                    job_info['status'] = 'COMPLETED (Download Failed)'
+
             elif refresh_job.state == "FAILED":
                 job_info['status'] = f"FAILED: {refresh_job.error.message}"
-                st.session_state["batch_jobs"].remove(job_info) # Remove failed
+                st.session_state["batch_jobs"].remove(job_info)
                 st.error(f"Batch {job_id} Failed.")
                 
             else:
-                job_info['status'] = refresh_job.state # Updating status (RUNNING/etc)
+                job_info['status'] = refresh_job.state 
                 
         except Exception as e:
             print(f"Batch Check Error: {e}")

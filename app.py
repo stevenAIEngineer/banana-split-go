@@ -1,13 +1,5 @@
-"""
-# -----------------------------------------------------------------------------
 # Banana Split Studio
-# A Multi-Style Generative Storyboard Application
-#
-# Developed by: Steven Lansangan
-# Date: 2025-12-29
-# -----------------------------------------------------------------------------
-"""
-
+# Multi-Style Generative Storyboard Application
 import warnings
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
@@ -24,9 +16,7 @@ import io
 import pickle
 import time
 
-# ---------------------------------------------------------
-# PERSISTENCE HELPERS
-# ---------------------------------------------------------
+# State Persistence
 STATE_FILE = "banana_state.pkl"
 
 def save_project():
@@ -38,7 +28,8 @@ def save_project():
         "sketch_style_dna": st.session_state.get("sketch_style_dna", ""),
         "final_style_dna": st.session_state.get("final_style_dna", ""),
         "free_render": st.session_state.get("free_render", None),
-        "free_video": st.session_state.get("free_video", None)
+        "free_video": st.session_state.get("free_video", None),
+        "batch_jobs": st.session_state.get("batch_jobs", [])
     }
     with open(STATE_FILE, "wb") as f:
         pickle.dump(state_data, f)
@@ -56,13 +47,11 @@ def load_project():
                 st.session_state["final_style_dna"] = state_data.get("final_style_dna", "")
                 st.session_state["free_render"] = state_data.get("free_render", None)
                 st.session_state["free_video"] = state_data.get("free_video", None)
+                st.session_state["batch_jobs"] = state_data.get("batch_jobs", [])
         except Exception as e:
             st.warning(f"Could not load previous session: {e}")
 
-# ---------------------------------------------------------
-# CONFIGURATION & SETUP
-# ---------------------------------------------------------
-
+# Config
 st.set_page_config(page_title="Banana Split Studio", layout="wide", page_icon="🍌")
 
 # Load Env
@@ -80,6 +69,8 @@ if "shots" not in st.session_state:
     st.session_state["shots"] = []
 if "generated_images" not in st.session_state:
     st.session_state["generated_images"] = {}
+if "batch_jobs" not in st.session_state:
+    st.session_state["batch_jobs"] = []
 if "initialized" not in st.session_state:
     load_project()
     st.session_state["initialized"] = True
@@ -101,9 +92,116 @@ SAFETY_SETTINGS = [
 # ---------------------------------------------------------
 
 
-# ---------------------------------------------------------
-# SIDEBAR: API KEY & RIGS
-# ---------------------------------------------------------
+# Batch Processing
+def submit_batch_job(job_type, api_key):
+    """Submits a Batch Job using JSONL upload."""
+    try:
+        client = genai_client_lib.Client(api_key=api_key)
+        
+        # Prepare Requests (Lines for JSONL)
+        jsonl_lines = []
+        shots = st.session_state["shots"]
+        roster = st.session_state.get("roster", {})
+        
+        for i, shot in enumerate(shots):
+            req_id = f"{job_type}_{i}"
+            request_body = {}
+            
+            if job_type == "sketch":
+                s_style = st.session_state.get('sketch_style_dna', "Rough professional storyboard sketch.")
+                prompt_text = f"TASK: STORYBOARD SKETCH. STYLE: {s_style}.\n"
+                if roster:
+                    prompt_text += "CHARACTERS: " + ", ".join([f"{n}" for n in roster.keys()]) + ".\n"
+                prompt_text += f"SCENE: {shot.get('action', '')}. {shot.get('dialogue', '')}"
+                
+                # Request Body
+                request_body = {
+                    "contents": [{"parts": [{"text": prompt_text}]}],
+                    "generation_config": {"temperature": 0.5}
+                }
+                model_id = DRAFT_MODEL
+
+            elif job_type == "final":
+                 # Text-only description for stability in batch mode
+                 style_ref = st.session_state.get('final_style_dna', "3D Pixar Style.")
+                 prompt_text = f"TASK: FINAL RENDER. STYLE: {style_ref}. SCENE: {shot.get('action', '')}."
+                 request_body = {
+                    "contents": [{"parts": [{"text": prompt_text}]}],
+                    "generation_config": {"temperature": 0.3}
+                 }
+                 model_id = FINAL_MODEL
+
+            # Full JSONL Object
+            json_line = {
+                "custom_id": req_id,
+                "request": request_body
+            }
+            jsonl_lines.append(json.dumps(json_line))
+            
+        if not jsonl_lines:
+            return None, "No tasks."
+            
+        # Write to temp JSONL file
+        temp_filename = f"batch_{job_type}_{int(time.time())}.jsonl"
+        with open(temp_filename, "w") as f:
+            f.write("\n".join(jsonl_lines))
+            
+        # Upload to Gemini
+        batch_file = client.files.upload(file=temp_filename, config={"mime_type": "application/json"})
+        
+        # Create Job
+        job = client.batches.create(
+            model=model_id,
+            src=batch_file.name,
+            config={"display_name": f"BananaSplit_{job_type}"}
+        )
+        
+        # Cleanup temp file
+        os.remove(temp_filename)
+        
+        return job, None
+
+    except Exception as e:
+        return None, str(e)
+
+def check_batch_updates(api_key):
+    """Checks and applies results for active batches."""
+    if not st.session_state["batch_jobs"]:
+        return 0 
+        
+    client = genai_client_lib.Client(api_key=api_key)
+    completed_count = 0
+    
+    active_jobs = st.session_state["batch_jobs"][:] # Copy to iterate
+    
+    for job_info in active_jobs:
+        job_id = job_info['id']
+        try:
+            # Poll Status
+            refresh_job = client.batches.get(name=job_id)
+            
+            if refresh_job.state == "SUCCEEDED":
+                # Download Results
+                # Placeholder for manual check
+                job_info['status'] = 'COMPLETED (Download Manually)'
+                
+                st.toast(f"Batch {job_id} Completed!", icon="✅")
+                st.session_state["batch_jobs"].remove(job_info)
+                completed_count += 1
+                
+            elif refresh_job.state == "FAILED":
+                job_info['status'] = f"FAILED: {refresh_job.error.message}"
+                st.session_state["batch_jobs"].remove(job_info) # Remove failed
+                st.error(f"Batch {job_id} Failed.")
+                
+            else:
+                job_info['status'] = refresh_job.state # Updating status (RUNNING/etc)
+                
+        except Exception as e:
+            print(f"Batch Check Error: {e}")
+            
+    save_project()
+    return completed_count
 
 st.sidebar.title("🍌 Banana Split")
 
@@ -121,7 +219,7 @@ except Exception as e:
 
 st.sidebar.markdown("---")
 
-# --- DATA MANAGEMENT ---
+# Sidebar UI
 with st.sidebar.expander("⚙️ Manage Data", expanded=False):
     c1, c2 = st.columns(2)
     if c1.button("Clear Cast"):
@@ -236,9 +334,7 @@ st.title("🎬 Storyboard Production")
 
 tab_story, tab_free, tab_video = st.tabs(["🎬 Storyboard Mode", "🎨 Free Render / Revise", "🎥 Free Video Studio"])
 
-# =========================================================
-# TAB 1: STORYBOARD (Existing Logic)
-# =========================================================
+# Main Tabs
 with tab_story:
     if not st.session_state["shots"]:
         st.info("Paste your script below to convert it into shots.")
@@ -263,6 +359,59 @@ with tab_story:
     # GALLERY
     if st.session_state['shots']:
         st.subheader(f"Shot List ({len(st.session_state['shots'])})")
+        
+        # Async Batching
+        with st.expander("⚡ Batch Operations (Async)", expanded=False):
+            st.caption("Submit all shots to Google's Batch API (Time-insensitive).")
+            b1, b2, b3 = st.columns([1,1,2])
+            
+            with b1:
+                if st.button("✨ Batch Sketch All", use_container_width=True):
+                    with st.spinner("Submitting Sketch Job..."):
+                        job, err = submit_batch_job("sketch", api_key)
+                        if job:
+                            st.session_state["batch_jobs"].append({
+                                "id": job.name,
+                                "type": "sketch",
+                                "status": "PENDING",
+                                "timestamp": time.time()
+                            })
+                            save_project()
+                            st.success(f"Job Sent! ID: {job.name.split('/')[-1]}")
+                        else:
+                            st.error(f"Failed: {err}")
+
+            with b2:
+                if st.button("🎬 Batch Render All", use_container_width=True):
+                    with st.spinner("Submitting Render Job..."):
+                        job, err = submit_batch_job("final", api_key)
+                        if job:
+                            st.session_state["batch_jobs"].append({
+                                "id": job.name,
+                                "type": "final",
+                                "status": "PENDING",
+                                "timestamp": time.time()
+                            })
+                            save_project()
+                            st.success(f"Job Sent! ID: {job.name.split('/')[-1]}")
+                        else:
+                            st.error(f"Failed: {err}")
+            
+            with b3:
+                if st.session_state["batch_jobs"]:
+                    st.write(f"**Active Jobs: {len(st.session_state['batch_jobs'])}**")
+                    if st.button("🔄 Check Status"):
+                         with st.spinner("Checking cloud..."):
+                             done = check_batch_updates(api_key)
+                             if done > 0: st.rerun()
+                             else: st.info("No jobs completed yet.")
+                    
+                    for j in st.session_state["batch_jobs"]:
+                        st.text(f"{j['type'].upper()}: {j['status']}")
+                else:
+                    st.info("No active batch jobs.")
+        
+        st.markdown("---")
 
 
         for i, shot in enumerate(st.session_state["shots"]):
@@ -396,9 +545,7 @@ with tab_story:
                             
                 st.divider()
 
-# =========================================================
-# TAB 2: FREE RENDER (STYLE MATCH TOOL)
-# =========================================================
+# Free Render Tab
 with tab_free:
     st.header("🎨 Free Render Mode")
     st.caption("Upload any sketch (or revised draft) and render it in your Locked Style.")

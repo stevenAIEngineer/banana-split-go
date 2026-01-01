@@ -1,5 +1,6 @@
 # Banana Split Studio
 # Multi-Style Generative Storyboard Application
+# Developed by: Steven Lansangan
 import warnings
 warnings.simplefilter(action='ignore', category=FutureWarning)
 

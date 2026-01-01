@@ -1,3 +1,5 @@
+# Developed by: Steven Lansangan
+# Developed by: Steven Lansangan
 import google.genai
 print(f"google.genai imported. Version: {google.genai.__version__}")
 try:

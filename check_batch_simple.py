@@ -1,3 +1,5 @@
+# Developed by: Steven Lansangan
+# Developed by: Steven Lansangan
 import google.genai
 print("google-genai imported")
 try:

@@ -317,10 +317,17 @@ with tab_story:
                                 st.session_state['generated_images'][i]['draft'] = img
                     
                     save_project()
+                    st.toast("✅ Batch Sketches Complete!", icon="✏️")
+                    time.sleep(1) # Brief pause for toast
                     st.rerun()
 
             # Generate Renders
             if c3.button("Generate Renders", use_container_width=True):
+                # Validation: Check for sketches
+                has_sketches = any('draft' in st.session_state['generated_images'].get(i, {}) for i, _ in enumerate(st.session_state['shots']))
+                if not has_sketches:
+                     st.warning("⚠️ Recommendation: Generate Sketches first for consistent layouts!")
+                     time.sleep(2)
                 
                 def render_task(idx, shot, mode, style, roster, current):
                     try:
@@ -365,55 +372,63 @@ with tab_story:
                                 st.session_state['generated_images'][i]['final'] = img
                     
                     save_project()
+                    st.toast("✅ Batch Renders Complete!", icon="🎨")
+                    time.sleep(1)
                     st.rerun()
 
             # Generate Videos (Batch)
             if st.button("Generate Videos (Batch)", use_container_width=True, type="secondary"):
-                
-                def generate_single_video(idx, shot):
-                    try:
-                        # 1. Get Image
-                        img_data = st.session_state.get('generated_images', {}).get(idx, {})
-                        final_img = img_data.get('final')
-                        
-                        if not final_img:
-                            return idx, None, "No final render found."
-
-                        prompt_text = f"Cinematic movement. {shot.get('action', '')}"
-                        client = genai_client_lib.Client(api_key=api_key)
-                        
-                        operation = client.models.generate_videos(
-                            model=VIDEO_MODEL,
-                            prompt=prompt_text,
-                            image=final_img,
-                            config={"fps": 24, "duration_seconds": 5} 
-                        )
-                        
-                        while not operation.done:
-                            time.sleep(10)
-                            operation = client.operations.get(operation)
+                # Validation: Check for finals
+                has_finals = any('final' in st.session_state['generated_images'].get(i, {}) for i, _ in enumerate(st.session_state['shots']))
+                if not has_finals:
+                    st.error("⛔ Stop: You must generate Final Renders before creating videos.")
+                else:
+                    def generate_single_video(idx, shot):
+                        try:
+                            # 1. Get Image
+                            img_data = st.session_state.get('generated_images', {}).get(idx, {})
+                            final_img = img_data.get('final')
                             
-                        if operation.result and operation.result.generated_videos:
-                            return idx, operation.result.generated_videos[0].video.uri, None
-                        return idx, None, "No video returned."
+                            if not final_img:
+                                return idx, None, "No final render found."
 
-                    except Exception as e:
-                        return idx, None, str(e)
+                            prompt_text = f"Cinematic movement. {shot.get('action', '')}"
+                            client = genai_client_lib.Client(api_key=api_key)
+                            
+                            operation = client.models.generate_videos(
+                                model=VIDEO_MODEL,
+                                prompt=prompt_text,
+                                image=final_img,
+                                config={"fps": 24, "duration_seconds": 5} 
+                            )
+                            
+                            while not operation.done:
+                                time.sleep(10)
+                                operation = client.operations.get(operation)
+                                
+                            if operation.result and operation.result.generated_videos:
+                                return idx, operation.result.generated_videos[0].video.uri, None
+                            return idx, None, "No video returned."
 
-                with st.spinner("Generating Videos... (This takes time per shot)"):
-                    with ThreadPoolExecutor(max_workers=2) as exe:
-                        futures = [exe.submit(generate_single_video, i, s) for i, s in enumerate(st.session_state['shots'])]
-                        for f in futures:
-                            i, vid_uri, err = f.result()
-                            if vid_uri:
-                                if i not in st.session_state['generated_videos']:
-                                    st.session_state['generated_videos'][i] = {}
-                                st.session_state['generated_videos'][i] = vid_uri
-                            elif err:
-                                st.error(f"Shot {i+1}: {err}")
-                    
-                    save_project()
-                    st.rerun()
+                        except Exception as e:
+                            return idx, None, str(e)
+
+                    with st.spinner("Generating Videos... (This takes time per shot)"):
+                        with ThreadPoolExecutor(max_workers=2) as exe:
+                            futures = [exe.submit(generate_single_video, i, s) for i, s in enumerate(st.session_state['shots'])]
+                            for f in futures:
+                                i, vid_uri, err = f.result()
+                                if vid_uri:
+                                    if i not in st.session_state['generated_videos']:
+                                        st.session_state['generated_videos'][i] = {}
+                                    st.session_state['generated_videos'][i] = vid_uri
+                                elif err:
+                                    st.error(f"Shot {i+1}: {err}")
+                        
+                        save_project()
+                        st.toast("✅ Batch Videos Complete!", icon="🎥")
+                        time.sleep(1)
+                        st.rerun()
 
         st.divider()
         # ---------------------------------------------------------

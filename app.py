@@ -578,7 +578,40 @@ with tab_story:
                             st.error(e)
 
                 if st.button("Video", key=f"vid_{i}"):
-                     st.info("Video coming soon!")
+                    # Single Video Generation Logic
+                    data = st.session_state['generated_images'].get(i, {})
+                    final_img = data.get('final')
+                    
+                    if not final_img:
+                        st.warning("Generate Final Render first!")
+                    else:
+                        with st.spinner("Generating Video..."):
+                            try:
+                                prompt_text = f"Cinematic movement. {shot.get('action', '')}"
+                                client = genai_client_lib.Client(api_key=api_key)
+                                
+                                operation = client.models.generate_videos(
+                                    model=VIDEO_MODEL,
+                                    prompt=prompt_text,
+                                    image=final_img,
+                                    config={"fps": 24, "duration_seconds": 5} 
+                                )
+                                
+                                while not operation.done:
+                                    time.sleep(10)
+                                    operation = client.operations.get(operation)
+                                
+                                if operation.result and operation.result.generated_videos:
+                                    vid_uri = operation.result.generated_videos[0].video.uri
+                                    if i not in st.session_state['generated_videos']:
+                                        st.session_state['generated_videos'][i] = {}
+                                    st.session_state['generated_videos'][i] = vid_uri
+                                    save_project()
+                                    st.rerun()
+                                else:
+                                    st.error("No video returned.")
+                            except Exception as e:
+                                st.error(str(e))
 
             with c3:
                 # View Results

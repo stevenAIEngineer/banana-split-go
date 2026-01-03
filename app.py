@@ -1,6 +1,6 @@
 # Banana Split Studio
-# Multi-Style Generative Storyboard Application
 # Developed by: Steven Lansangan
+
 import warnings
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
@@ -8,21 +8,32 @@ import streamlit as st
 import os
 import google.generativeai as genai
 from google import genai as genai_client_lib
-from google.genai import types
 from dotenv import load_dotenv
 from PIL import Image
-
 import json
 import io
 import pickle
 import time
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
-# State Persistence
+# Constants
 STATE_FILE = "banana_state.pkl"
+ANALYSIS_MODEL = "gemini-2.0-flash-exp" 
+DRAFT_MODEL = "gemini-3-pro-image-preview"
+FINAL_MODEL = "gemini-3-pro-image-preview"
+VIDEO_MODEL = "veo-3.1-generate-preview"
+
+# Safety Config
+SAFETY_SETTINGS = [
+    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+]
 
 def save_project():
-    """Saves critical session state to disk."""
-    state_data = {
+    state = {
         "roster": st.session_state.get("roster", {}),
         "shots": st.session_state.get("shots", []),
         "generated_images": st.session_state.get("generated_images", {}),
@@ -32,289 +43,50 @@ def save_project():
         "free_video": st.session_state.get("free_video", None)
     }
     with open(STATE_FILE, "wb") as f:
-        pickle.dump(state_data, f)
+        pickle.dump(state, f)
 
 def load_project():
-    """Loads session state from disk if exists."""
     if os.path.exists(STATE_FILE):
         try:
             with open(STATE_FILE, "rb") as f:
-                state_data = pickle.load(f)
-                st.session_state["roster"] = state_data.get("roster", {})
-                st.session_state["shots"] = state_data.get("shots", [])
-                st.session_state["generated_images"] = state_data.get("generated_images", {})
-                st.session_state["sketch_style_dna"] = state_data.get("sketch_style_dna", "")
-                st.session_state["final_style_dna"] = state_data.get("final_style_dna", "")
-                st.session_state["free_render"] = state_data.get("free_render", None)
-                st.session_state["free_video"] = state_data.get("free_video", None)
+                data = pickle.load(f)
+                st.session_state.update(data)
         except Exception as e:
-            st.warning(f"Could not load previous session: {e}")
+            st.warning(f"Error loading state: {e}")
 
-# Config
 st.set_page_config(page_title="Banana Split Studio", layout="wide", page_icon="🍌")
-
-# Load Env
 load_dotenv()
-env_key = os.getenv("GOOGLE_API_KEY")
 
-# Session State Init
-if "sketch_style_dna" not in st.session_state:
-    st.session_state["sketch_style_dna"] = ""
-if "final_style_dna" not in st.session_state:
-    st.session_state["final_style_dna"] = ""
-if "roster" not in st.session_state:
-    st.session_state["roster"] = {} # Format: { "Name": {"image": PIL_Img, "dna": "desc"} }
-if "shots" not in st.session_state:
-    st.session_state["shots"] = []
-if "generated_images" not in st.session_state:
-    st.session_state["generated_images"] = {}
+# Initialize State
+defaults = {
+    "sketch_style_dna": "",
+    "final_style_dna": "",
+    "roster": {},
+    "shots": [],
+    "generated_images": {},
+    "batch_jobs": []
+}
+
+for k, v in defaults.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
+
 if "initialized" not in st.session_state:
     load_project()
     st.session_state["initialized"] = True
 
-# Constants
-ANALYSIS_MODEL = "gemini-2.0-flash-exp" 
-DRAFT_MODEL = "gemini-3-pro-image-preview"
-FINAL_MODEL = "gemini-3-pro-image-preview"
-VIDEO_MODEL = "veo-3.1-generate-preview"
-
-# Safety Settings (Standard)
-SAFETY_SETTINGS = [
-    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-]
-
-# ---------------------------------------------------------
 
 
-# Batch Processing
-def submit_batch_job(job_type, api_key):
-    """Submits a Batch Job using JSONL upload."""
-    try:
-        client = genai_client_lib.Client(api_key=api_key)
-        
-        # Prepare Requests (Lines for JSONL)
-        jsonl_lines = []
-        shots = st.session_state["shots"]
-        roster = st.session_state.get("roster", {})
-        
-        for i, shot in enumerate(shots):
-            req_id = f"{job_type}_{i}"
-            request_body = {}
-            
-            if job_type == "sketch":
-                s_style = st.session_state.get('sketch_style_dna', "Rough professional storyboard sketch.")
-                prompt_text = f"TASK: STORYBOARD SKETCH. STYLE: {s_style}.\n"
-                if roster:
-                    prompt_text += "CHARACTERS: " + ", ".join([f"{n}" for n in roster.keys()]) + ".\n"
-                prompt_text += f"SCENE: {shot.get('action', '')}. {shot.get('dialogue', '')}"
-                
-                # Request Body
-                request_body = {
-                    "contents": [{"parts": [{"text": prompt_text}]}],
-                    "generation_config": {"temperature": 0.5}
-                }
-                model_id = DRAFT_MODEL
 
-            elif job_type == "final":
-                 # Use Draft Sketch for fidelity
-                 style_ref = st.session_state.get('final_style_dna', "3D Pixar Style.")
-                 prompt_text = f"TASK: FINAL RENDER. STYLE: {style_ref}. Turn this sketch into high fidelity render. SCENE: {shot.get('action', '')}."
-                 
-                 # Check for draft image
-                 current_data = st.session_state['generated_images'].get(i, {})
-                 parts = [{"text": prompt_text}]
-                 
-                 if isinstance(current_data, dict) and 'draft' in current_data:
-                     # Convert Draft to Base64 for JSONL
-                     buf = io.BytesIO()
-                     current_data['draft'].save(buf, format="PNG")
-                     b64_data = base64.b64encode(buf.getvalue()).decode('utf-8')
-                     
-                     parts.append({
-                         "inline_data": {
-                             "mime_type": "image/png",
-                             "data": b64_data
-                         }
-                     })
-                 
-                 request_body = {
-                    "contents": [{"parts": parts}],
-                    "generation_config": {"temperature": 0.3}
-                 }
-                 model_id = FINAL_MODEL
-
-            # Full JSONL Object
-            json_line = {
-                "custom_id": req_id,
-                "request": request_body
-            }
-            jsonl_lines.append(json.dumps(json_line))
-            
-        if not jsonl_lines:
-            return None, "No tasks."
-            
-        # Write to temp JSONL file
-        temp_filename = f"batch_{job_type}_{int(time.time())}.jsonl"
-        with open(temp_filename, "w") as f:
-            f.write("\n".join(jsonl_lines))
-            
-        # Upload to Gemini
-        batch_file = client.files.upload(file=temp_filename, config={"mime_type": "application/json"})
-        
-        # Create Job
-        job = client.batches.create(
-            model=model_id,
-            src=batch_file.name,
-            config={"display_name": f"BananaSplit_{job_type}"}
-        )
-        
-        # Cleanup temp file
-        os.remove(temp_filename)
-        
-        return job, None
-
-    except Exception as e:
-        return None, str(e)
-
-def check_batch_updates(api_key):
-    """Checks and applies results for active batches."""
-    if not st.session_state["batch_jobs"]:
-        return 0 
-        
-    client = genai_client_lib.Client(api_key=api_key)
-    completed_count = 0
-    
-    active_jobs = st.session_state["batch_jobs"][:] # Copy to iterate
-    
-    for job_info in active_jobs:
-        job_id = job_info['id']
-        try:
-            # Poll Status
-            refresh_job = client.batches.get(name=job_id)
-            
-            # Check Status (Handle Enum or String)
-            state_str = str(refresh_job.state)
-            
-            if "SUCCEEDED" in state_str:
-                # Attempt to download results
-                output_name = None
-                
-                # 1. Try 'output_file' (Older SDKs)
-                output_name = getattr(refresh_job, "output_file", None)
-                
-                if not output_name:
-                     # 2. Try 'dest' attribute (Available in current SDK)
-                     dest_attr = getattr(refresh_job, "dest", None)
-                     if dest_attr:
-                         if hasattr(dest_attr, "name"):
-                             output_name = dest_attr.name
-                         else:
-                             output_name = str(dest_attr)
-                
-                if not output_name:
-                     # UI Debugging if still missing
-                     st.error(f"Job {job_id} Succeeded, but output link missing.")
-                     st.write("**Raw Job Data (for debugging):**")
-                     try:
-                         st.json(refresh_job.to_json_dict())
-                     except:
-                         st.write("Could not dump JSON.")
-                         st.code(str(dir(refresh_job)))
-                     
-                     job_info['status'] = 'COMPLETED (Unknown Output - See Debug)'
-                     continue
-
-                # Download content (bytes)
-                try:
-                    # Method: Get File Object -> URI -> HTTP GET
-                    file_obj = client.files.get(name=output_name)
-                    download_url = f"{file_obj.uri}?key={api_key}"
-                    
-                    resp = requests.get(download_url)
-                    if resp.status_code != 200:
-                        raise Exception(f"HTTP {resp.status_code}")
-                        
-                    file_content = resp.content # bytes
-                    
-                    # Parse JSONL
-                    text_content = file_content.decode("utf-8")
-                    lines = text_content.strip().split("\n")
-                    
-                    success_items = 0
-                    for line in lines:
-                        if not line.strip(): continue
-                        item = json.loads(line)
-                        custom_id = item.get("custom_id", "")
-                        
-                        # Parse ID "sketch_0" -> 0
-                        if "_" in custom_id:
-                            c_type, idx_str = custom_id.split("_")
-                            idx = int(idx_str)
-                            
-                            # Extract Image
-                            response_pkl = item.get("response", {})
-                            
-                            try:
-                                cand = response_pkl.get('candidates', [])[0]
-                                parts = cand.get('content', {}).get('parts', [])
-                                
-                                img_data = None
-                                for p in parts:
-                                    if 'inline_data' in p:
-                                        b64_str = p['inline_data']['data']
-                                        img_bytes = base64.b64decode(b64_str)
-                                        img_data = Image.open(io.BytesIO(img_bytes))
-                                        break
-                                
-                                if img_data:
-                                    if idx not in st.session_state['generated_images']: 
-                                        st.session_state['generated_images'][idx] = {}
-                                        
-                                    target_key = "draft" if c_type == "sketch" else "final"
-                                    st.session_state['generated_images'][idx][target_key] = img_data
-                                    success_items += 1
-                                    
-                            except Exception as parse_err:
-                                print(f"Parse error for {custom_id}: {parse_err}")
-
-                    st.toast(f"Batch Completed! {success_items} shots updated.", icon="✅")
-                    st.session_state["batch_jobs"].remove(job_info)
-                    completed_count += 1
-
-                except Exception as dl_err:
-                     st.error(f"Download Failed for {output_name}: {dl_err}")
-                     job_info['status'] = 'COMPLETED (Download Failed)'
-
-            elif "FAILED" in state_str:
-                job_info['status'] = f"FAILED: {refresh_job.error.message}"
-                st.session_state["batch_jobs"].remove(job_info)
-                st.error(f"Batch {job_id} Failed.")
-                
-            else:
-                job_info['status'] = state_str 
-                
-        except Exception as e:
-            print(f"Batch Check Error: {e}")
-            
-    save_project()
-    return completed_count
-
-# ---------------------------------------------------------
-# UI START
-# ---------------------------------------------------------
-
+# Sidebar
 st.sidebar.title("🍌 Banana Split")
 
-# API Key
+env_key = os.getenv("GOOGLE_API_KEY")
 api_key = env_key
 if not api_key:
     api_key = st.sidebar.text_input("🔑 API Key", type="password")
-    if not api_key:
-        st.sidebar.warning("Key required.")
-        st.stop()
+    if not api_key: st.stop()
+
 try:
     genai.configure(api_key=api_key)
 except Exception as e:
@@ -322,8 +94,8 @@ except Exception as e:
 
 st.sidebar.markdown("---")
 
-# Sidebar UI
-with st.sidebar.expander("⚙️ Manage Data", expanded=False):
+# Data Management
+with st.sidebar.expander("⚙️ Manage Data"):
     c1, c2 = st.columns(2)
     if c1.button("Clear Cast"):
         st.session_state["roster"] = {}
@@ -335,355 +107,370 @@ with st.sidebar.expander("⚙️ Manage Data", expanded=False):
         save_project()
         st.rerun()
     
-    c3, c4 = st.columns(2)
-    if c3.button("Clear Storyboard"):
-        st.session_state["shots"] = []
-        st.session_state["generated_images"] = {}
-        save_project()
-        st.rerun()
-    if c4.button("Clear Free Render"):
-        st.session_state["free_render"] = None
-        st.session_state["free_video"] = None
-        save_project()
-        st.rerun()
-        
-    if st.button("⚠️ Factory Reset (All)", type="primary"):
+    if st.button("Clear All Data", type="primary"):
         st.session_state["roster"] = {}
         st.session_state["shots"] = []
         st.session_state["generated_images"] = {}
         st.session_state["sketch_style_dna"] = ""
         st.session_state["final_style_dna"] = ""
-        st.session_state["free_render"] = None
-        st.session_state["free_video"] = None
         save_project()
         st.rerun()
 
 st.sidebar.markdown("---")
+st.sidebar.subheader("Cast Roster")
 
-# --- ROSTER UI ---
-st.sidebar.header("👥 Cast Roster")
-
-# Add Character Form
+# Add Character
 with st.sidebar.form("new_char_form", clear_on_submit=True):
-    st.caption("➕ Add a new character")
-    c_name = st.text_input("Name", placeholder="e.g. Babaru")
+    c_name = st.text_input("Name")
     c_file = st.file_uploader("Reference Image", type=["jpg", "png"])
-    submitted = st.form_submit_button("Add to Cast")
-    
-    if submitted and c_name and c_file:
-        with st.spinner("Analyzing Traits..."):
-            try:
-                img = Image.open(c_file).convert("RGB")
-                model = genai.GenerativeModel(ANALYSIS_MODEL)
-                dna_prompt = "Analyze physical traits (species, colors, clothes) for character consistency. Concise."
-                res = model.generate_content([dna_prompt, img])
-                
-                st.session_state['roster'][c_name] = {"image": img, "dna": res.text}
-                save_project()
-                st.toast(f"✅ {c_name} added!")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Failed: {e}")
+    if st.form_submit_button("Add") and c_name and c_file:
+        try:
+            img = Image.open(c_file).convert("RGB")
+            model = genai.GenerativeModel(ANALYSIS_MODEL)
+            res = model.generate_content(["Describe physical traits for consistency.", img])
+            st.session_state['roster'][c_name] = {"image": img, "dna": res.text}
+            save_project()
+            st.rerun()
+        except Exception as e:
+            st.error(e)
 
-# Cast Grid Display
+# List Characters
 if st.session_state['roster']:
-    st.sidebar.caption("Active Cast")
-    # Custom CSS for compact grid could go here, but we use columns for simplicity
     for name, data in list(st.session_state['roster'].items()):
-        c1, c2, c3 = st.sidebar.columns([1, 2, 1])
-        c1.image(data['image'], use_container_width=True)
+        c1, c2 = st.sidebar.columns([1, 2])
+        c1.image(data['image'])
         c2.write(f"**{name}**")
-        if c3.button("×", key=f"del_{name}", help="Remove"):
+        if c2.button("Remove", key=f"del_{name}"):
             del st.session_state['roster'][name]
             save_project()
             st.rerun()
-else:
-    st.sidebar.info("Roster is empty. Add a character above!")
 
 st.sidebar.markdown("---")
-st.sidebar.header("🎨 Style Configuration")
+st.sidebar.subheader("Style Config")
 
-tab_s1, tab_s2 = st.sidebar.tabs(["Draft (Sketch)", "Final (Render)"])
+tab1, tab2 = st.sidebar.tabs(["Sketch", "Render"])
 
-with tab_s1:
-    st.caption("Style for Sketches (Draft)")
+with tab1:
     s_file = st.file_uploader("Sketch Ref", type=["jpg", "png"], key="s_up")
     if s_file:
         s_img = Image.open(s_file).convert("RGB")
-        st.image(s_img, use_container_width=True)
+        st.image(s_img)
         if st.button("Analyze Sketch Style"):
-            with st.spinner("Analyzing..."):
-                m = genai.GenerativeModel(ANALYSIS_MODEL)
-                st.session_state['sketch_style_dna'] = m.generate_content(["Describe art style.", s_img]).text
-                save_project()
-                st.success("Sketch Style Locked!")
+            m = genai.GenerativeModel(ANALYSIS_MODEL)
+            st.session_state['sketch_style_dna'] = m.generate_content(["Describe art style.", s_img]).text
+            save_project()
+            st.success("Style Locked!")
 
-with tab_s2:
-    st.caption("Style for Finals (Render)")
+with tab2:
     f_file = st.file_uploader("Render Ref", type=["jpg", "png"], key="f_up")
     if f_file:
         f_img = Image.open(f_file).convert("RGB")
-        st.image(f_img, use_container_width=True)
+        st.image(f_img)
         if st.button("Analyze Render Style"):
-            with st.spinner("Analyzing..."):
-                m = genai.GenerativeModel(ANALYSIS_MODEL)
-                st.session_state['final_style_dna'] = m.generate_content(["Describe art style.", f_img]).text
-                save_project()
-                st.success("Final Style Locked!")
+            m = genai.GenerativeModel(ANALYSIS_MODEL)
+            st.session_state['final_style_dna'] = m.generate_content(["Describe art style.", f_img]).text
+            save_project()
+            st.success("Style Locked!")
 
 
 
 st.title("🎬 Storyboard Production")
 
-tab_story, tab_free, tab_video = st.tabs(["🎬 Storyboard Mode", "🎨 Free Render / Revise", "🎥 Free Video Studio"])
+tab_story, tab_free, tab_video = st.tabs(["Storyboard", "Free Render", "Video"])
 
-# Main Tabs
 with tab_story:
     if not st.session_state["shots"]:
-        st.info("Paste your script below to convert it into shots.")
+        st.info("Start by pasting your script below.")
 
-
-    with st.expander("📝 Script Editor", expanded=not bool(st.session_state["shots"])):
-        script_text = st.text_area("Input Script", height=150, placeholder="INT. KITCHEN - DAY\nBABARU eats a banana...")
+    with st.expander("Script Editor", expanded=not bool(st.session_state["shots"])):
+        script_text = st.text_area("Input Script", height=150)
         
-        if st.button("Chunk Script"):
+        if st.button("Process Script"):
             if script_text:
-                with st.spinner("Processing..."):
-                    try:
-                        model = genai.GenerativeModel(ANALYSIS_MODEL, generation_config={"response_mime_type": "application/json"})
-                        sys_p = "Convert to JSON list of shots (id, action). If 'Donald/Trump', rename to 'The President' (caricature, heavy suit)."
-                        res = model.generate_content(f"{sys_p}\nSCRIPT:\n{script_text}")
-                        st.session_state['shots'] = json.loads(res.text)
-                        save_project()
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Error: {e}")
+                try:
+                    model = genai.GenerativeModel(ANALYSIS_MODEL, generation_config={"response_mime_type": "application/json"})
+                    sys_p = "Convert to JSON list of shots (id, action, dialogue)."
+                    res = model.generate_content(f"{sys_p}\nSCRIPT:\n{script_text}")
+                    st.session_state['shots'] = json.loads(res.text)
+                    save_project()
+                    st.rerun()
+                except Exception as e:
+                    st.error(e)
 
-    # GALLERY
+    # Shot Generation Controls
     if st.session_state['shots']:
-        st.subheader(f"Shot List ({len(st.session_state['shots'])})")
+        st.subheader(f"Shots ({len(st.session_state['shots'])})")
         
-        st.markdown("---")
-
-
-        for i, shot in enumerate(st.session_state["shots"]):
-            with st.container():
-                st.markdown(f"#### {shot.get('id', i+1)}")
-                c1, c2, c3 = st.columns([2, 1, 3])
+        with st.container():
+            c1, c2, c3 = st.columns([1, 1, 2])
+            mode = c1.radio("Mode", ["Fast", "Consistent"], index=1, horizontal=True)
+            
+            # Generate Sketches
+            if c2.button("Generate Sketches", type="primary", use_container_width=True):
                 
-                with c1:
-                    # Editable Action Prompt
-                    def update_action():
-                        st.session_state['shots'][i]['action'] = st.session_state[f"action_{i}"]
-                        save_project()
+                def sketch_task(idx, shot, mode, style, roster):
+                    try:
+                        inputs = [f"TASK: SKETCH. STYLE: {style}."]
+                        scene = f"SCENE: {shot.get('action', '')}. {shot.get('dialogue', '')}"
                         
-                    action_val = st.text_area("Action", value=shot.get('action'), key=f"action_{i}", height=100, on_change=update_action)
+                        if mode == "Consistent" and roster:
+                            for n, d in roster.items():
+                                inputs.extend([d['image'], f"ID: {n} (Ref)."])
+                        
+                        inputs.append(f"{scene} \nCONSTRAINT: No shading. Lines only.")
+                        
+                        m = genai.GenerativeModel(DRAFT_MODEL, safety_settings=SAFETY_SETTINGS)
+                        res = m.generate_content(inputs)
+                        
+                        img = None
+                        if res.parts:
+                            for p in res.parts:
+                                if p.inline_data:
+                                    img = Image.open(io.BytesIO(p.inline_data.data))
+                                    break
+                        return idx, img, None
+                    except Exception as e:
+                        return idx, None, str(e)
+
+                with st.status("Sketching...", expanded=True) as status:
+                    style = st.session_state.get('sketch_style_dna', "Blue pencil sketch.")
+                    roster = st.session_state.get('roster', {})
                     
-                    # Cast Selector per shot
-                    active_cast = list(st.session_state['roster'].keys())
-                    selected = st.multiselect("Cast", active_cast, default=active_cast, key=f"cast_{i}", label_visibility="collapsed")
-
-                with c2:
-                    # 🖊️ DRAFT
-                    if st.button("Draft", key=f"draft_{i}", help="Generate rough sketch"):
-                        with st.spinner("Sketching..."):
-                            try:
-                                # Style Configuration
-                                s_style = st.session_state.get('sketch_style_dna', "")
-                                if not s_style: s_style = "Rough blue pencil sketch, loose, dynamic, 2D animation layout."
-                                
-                                inputs = [f"TASK: SKETCH. STYLE: {s_style}. \nCHARACTERS:"]
-                                if selected:
-                                    for n in selected:
-                                        inputs.append(st.session_state['roster'][n]['image'])
-                                        inputs.append(f"ID: {n} (Use as reference).")
-                                else:
-                                    inputs.append("Generic characters fitting the scene.")
-                                
-                                inputs.append(f"\nSCENE: {action_val}. \nCONSTRAINT: Follow the style: {s_style}. No shading. Just lines.")
-
-                                m = genai.GenerativeModel(DRAFT_MODEL, safety_settings=SAFETY_SETTINGS, generation_config={"temperature": 0.5})
-                                r = m.generate_content(inputs)
-                                
-                                img = None
-                                if r.parts:
-                                    for p in r.parts:
-                                        if p.inline_data: img = Image.open(io.BytesIO(p.inline_data.data))
-                                
-                                if img: 
-                                    if i not in st.session_state['generated_images']: st.session_state['generated_images'][i] = {}
-                                    elif not isinstance(st.session_state['generated_images'][i], dict):
-                                        st.session_state['generated_images'][i] = {'final': st.session_state['generated_images'][i]}
-                                        
-                                    st.session_state['generated_images'][i]['draft'] = img
-                                    save_project()
-                                    st.rerun()
-                                else: st.warning("No sketch.")
-                            except Exception as e:
-                                st.error(str(e))
-
-                    # 🎬 FINAL
-                    if st.button("Final", key=f"final_{i}", help="Generate final render"):
-                        with st.spinner("Rendering..."):
-                            try:
-                                # Style Configuration
-                                style_ref = st.session_state.get('final_style_dna', "")
-                                if not style_ref:
-                                    style_ref = "3D Pixar Animation Style. Cute, expressive, volumetric lighting, high fidelity CGI."
-                                    
-                                inputs = [f"TASK: FINAL RENDER. STYLE: {style_ref}.\n"]
-                                
-                                has_draft = i in st.session_state['generated_images'] and isinstance(st.session_state['generated_images'][i], dict) and 'draft' in st.session_state['generated_images'][i]
-                                if has_draft:
-                                    inputs.append(st.session_state['generated_images'][i]['draft'])
-                                    inputs.append("INSTRUCTION: turn this detailed sketch into a high-fidelity render matching the STYLE. Keep composition exactly.")
-                                
-                                if selected:
-                                    inputs.append("CHARACTERS (Texture/Identity Ref):")
-                                    for n in selected:
-                                        inputs.append(st.session_state['roster'][n]['image'])
-                                        inputs.append(f"ID: {n}.")
-                                
-                                scene = f"\nSCENE: {action_val}. \nLIGHTING: Cinematic volumetric."
-                                inputs.append(scene)
-                                
-                                m = genai.GenerativeModel(FINAL_MODEL, safety_settings=SAFETY_SETTINGS, generation_config={"temperature": 0.3})
-                                r = m.generate_content(inputs)
-                                    
-                                img = None
-                                if r.parts:
-                                    for p in r.parts:
-                                        if p.inline_data: img = Image.open(io.BytesIO(p.inline_data.data))
-                                
-                                if img: 
-                                    if i not in st.session_state['generated_images']: st.session_state['generated_images'][i] = {}
-                                    elif not isinstance(st.session_state['generated_images'][i], dict):
-                                        st.session_state['generated_images'][i] = {'final': st.session_state['generated_images'][i]}
-                                        
-                                    st.session_state['generated_images'][i]['final'] = img
-                                    save_project()
-                                    st.rerun()
-                                else: st.warning("No render.")
-                            except Exception as e:
-                                st.error(str(e))
-
-                    # 🎥 ACTION (VIDEO)
-                    if st.button("Action!", key=f"vid_{i}", help="Generate video (Coming Soon)"):
-                         st.toast("🎬 The AI director is in their trailer. Video generation coming soon!", icon="⛔")
-                         st.info("Video generation is currently on coffee break. Check back later!")
-
-                with c3:
-                    # Multi-View with Downloads
-                    current_data = st.session_state['generated_images'].get(i, {})
-                    if not isinstance(current_data, dict):
-                        current_data = {'final': current_data}
-                        st.session_state['generated_images'][i] = current_data
+                    with ThreadPoolExecutor(max_workers=4) as exe:
+                        futures = [exe.submit(sketch_task, i, s, mode, style, roster) for i, s in enumerate(st.session_state['shots'])]
+                        for f in futures:
+                            i, img, err = f.result()
+                            if img:
+                                if i not in st.session_state['generated_images']: 
+                                    st.session_state['generated_images'][i] = {}
+                                st.session_state['generated_images'][i]['draft'] = img
+                                st.write(f"✅ Shot {i+1}")
                     
-                    tabs_display = st.tabs(["Draft", "Final"])
+                    save_project()
+                    status.update(label="Done!", state="complete", expanded=False)
+                    st.rerun()
+
+            # Generate Renders
+            if c3.button("Generate Renders", use_container_width=True):
+                
+                def render_task(idx, shot, mode, style, roster, current):
+                    try:
+                        inputs = [f"TASK: RENDER. STYLE: {style}."]
+                        scene = f"SCENE: {shot.get('action', '')}."
+                        
+                        if idx in current and 'draft' in current[idx]:
+                            inputs.extend([current[idx]['draft'], "INSTRUCTION: Image-to-Image render. Keep layout."])
+
+                        if mode == "Consistent" and roster:
+                            inputs.append("CHARACTERS:")
+                            for n, d in roster.items():
+                                inputs.extend([d['image'], f"ID: {n}."])
+
+                        inputs.append(scene)
+                        
+                        m = genai.GenerativeModel(FINAL_MODEL, safety_settings=SAFETY_SETTINGS)
+                        res = m.generate_content(inputs)
+                        
+                        img = None
+                        if res.parts:
+                            for p in res.parts:
+                                if p.inline_data:
+                                    img = Image.open(io.BytesIO(p.inline_data.data))
+                                    break
+                        return idx, img, None
+                    except Exception as e:
+                        return idx, None, str(e)
+                
+                with st.status("Rendering...", expanded=True) as status:
+                    style = st.session_state.get('final_style_dna', "3D High Fidelity.")
+                    roster = st.session_state.get('roster', {})
+                    current = st.session_state['generated_images']
                     
-                    with tabs_display[0]:
-                        if 'draft' in current_data:
-                            st.image(current_data['draft'], use_container_width=True)
-                            buf = io.BytesIO()
-                            current_data['draft'].save(buf, format="PNG")
-                            st.download_button("⬇️ Draft", data=buf.getvalue(), file_name=f"s{i+1}_draft.png", mime="image/png", key=f"dl_d_{i}")
+                    with ThreadPoolExecutor(max_workers=4) as exe:
+                        futures = [exe.submit(render_task, i, s, mode, style, roster, current) for i, s in enumerate(st.session_state['shots'])]
+                        for f in futures:
+                            i, img, err = f.result()
+                            if img:
+                                if i not in st.session_state['generated_images']: 
+                                    st.session_state['generated_images'][i] = {}
+                                st.session_state['generated_images'][i]['final'] = img
+                                st.write(f"✅ Shot {i+1}")
                     
-                    with tabs_display[1]:
-                        if 'final' in current_data:
-                            st.image(current_data['final'], use_container_width=True)
-                            buf = io.BytesIO()
-                            current_data['final'].save(buf, format="PNG")
-                            st.download_button("⬇️ Final", data=buf.getvalue(), file_name=f"s{i+1}_final.png", mime="image/png", key=f"dl_f_{i}")
+                    save_project()
+                    status.update(label="Done!", state="complete", expanded=False)
+                    st.rerun()
+
+        st.divider()
+        # ---------------------------------------------------------
+
+
+    for i, shot in enumerate(st.session_state["shots"]):
+        with st.container():
+            st.markdown(f"#### {shot.get('id', i+1)}")
+            c1, c2, c3 = st.columns([2, 1, 3])
+            
+            with c1:
+                # Action Editor
+                def update_action():
+                    st.session_state['shots'][i]['action'] = st.session_state[f"action_{i}"]
+                    save_project()
+                    
+                action_val = st.text_area("Action", value=shot.get('action'), key=f"action_{i}", height=100, on_change=update_action)
+                
+                # Cast
+                active_cast = list(st.session_state['roster'].keys())
+                selected = st.multiselect("Cast", active_cast, default=active_cast, key=f"cast_{i}")
+
+            with c2:
+                # Draft Button
+                if st.button("Draft", key=f"draft_{i}"):
+                    with st.spinner("Sketching..."):
+                        try:
+                            style = st.session_state.get('sketch_style_dna', "Blue pencil sketch.")
+                            inputs = [f"TASK: SKETCH. STYLE: {style}."]
                             
-                st.divider()
+                            if selected:
+                                for n in selected:
+                                    inputs.extend([st.session_state['roster'][n]['image'], f"ID: {n} (Ref)."])
+                            
+                            inputs.append(f"SCENE: {action_val}. \nCONSTRAINT: Lines only.")
+                            
+                            m = genai.GenerativeModel(DRAFT_MODEL, safety_settings=SAFETY_SETTINGS)
+                            res = m.generate_content(inputs)
+                            
+                            img = None
+                            if res.parts:
+                                for p in res.parts:
+                                    if p.inline_data: img = Image.open(io.BytesIO(p.inline_data.data))
+                            
+                            if img: 
+                                if i not in st.session_state['generated_images']: st.session_state['generated_images'][i] = {}
+                                st.session_state['generated_images'][i]['draft'] = img
+                                save_project()
+                                st.rerun()
+                        except Exception as e:
+                            st.error(e)
+
+                # Final Button
+                if st.button("Final", key=f"final_{i}"):
+                    with st.spinner("Rendering..."):
+                        try:
+                            style = st.session_state.get('final_style_dna', "3D High Fidelity.")
+                            inputs = [f"TASK: RENDER. STYLE: {style}."]
+                            
+                            # Img2Img Check
+                            curr = st.session_state['generated_images'].get(i, {})
+                            if isinstance(curr, dict) and 'draft' in curr:
+                                inputs.extend([curr['draft'], "INSTRUCTION: Keep layout."])
+                            
+                            if selected:
+                                inputs.append("CHARACTERS:")
+                                for n in selected:
+                                    inputs.extend([st.session_state['roster'][n]['image'], f"ID: {n}."])
+                            
+                            inputs.append(f"SCENE: {action_val}.")
+                            
+                            m = genai.GenerativeModel(FINAL_MODEL, safety_settings=SAFETY_SETTINGS)
+                            res = m.generate_content(inputs)
+                                
+                            img = None
+                            if res.parts:
+                                for p in res.parts:
+                                    if p.inline_data: img = Image.open(io.BytesIO(p.inline_data.data))
+                            
+                            if img: 
+                                if i not in st.session_state['generated_images']: st.session_state['generated_images'][i] = {}
+                                st.session_state['generated_images'][i]['final'] = img
+                                save_project()
+                                st.rerun()
+                        except Exception as e:
+                            st.error(e)
+
+                if st.button("Video", key=f"vid_{i}"):
+                     st.info("Video coming soon!")
+
+            with c3:
+                # View Results
+                data = st.session_state['generated_images'].get(i, {})
+                if not isinstance(data, dict): data = {} # Safety check
+                
+                t1, t2 = st.tabs(["Draft", "Final"])
+                
+                with t1:
+                    if 'draft' in data:
+                        st.image(data['draft'])
+                        buf = io.BytesIO()
+                        data['draft'].save(buf, format="PNG")
+                        st.download_button("Download", data=buf.getvalue(), file_name=f"s{i}_draft.png", key=f"dl_d_{i}")
+                
+                with t2:
+                    if 'final' in data:
+                        st.image(data['final'])
+                        buf = io.BytesIO()
+                        data['final'].save(buf, format="PNG")
+                        st.download_button("Download", data=buf.getvalue(), file_name=f"s{i}_final.png", key=f"dl_f_{i}")
+            
+            st.divider()
 
 # Free Render Tab
 with tab_free:
     st.header("🎨 Free Render Mode")
-    st.caption("Upload any sketch (or revised draft) and render it in your Locked Style.")
     
-    col_input, col_output = st.columns(2)
+    col1, col2 = st.columns(2)
     
-    with col_input:
-        uploaded_sketch = st.file_uploader("Upload Sketch/Layout", type=["jpg", "png", "jpeg"], key="free_up")
+    with col1:
+        up_file = st.file_uploader("Upload Layout", type=["jpg", "png"], key="free_up")
         
-        # Cast Selection
         active_cast = list(st.session_state['roster'].keys())
-        selected_free = st.multiselect("Active Cast (for Texture/Identity)", active_cast, default=active_cast, key="free_cast")
+        selected = st.multiselect("Active Cast", active_cast, default=active_cast, key="free_cast")
         
-        # Prompt
-        free_prompt = st.text_area("Scene Description", placeholder="Describe the action/lighting...", height=100)
+        prompt = st.text_area("Description")
         
         if st.button("Render", type="primary"):
-            if not uploaded_sketch:
-                st.warning("Please upload a sketch first.")
+            if not up_file:
+                st.warning("Upload sketch first.")
             else:
                 with st.spinner("Rendering..."):
                     try:
-                        sketch_img = Image.open(uploaded_sketch).convert("RGB")
+                        img_in = Image.open(up_file).convert("RGB")
+                        style = st.session_state.get('final_style_dna', "High Fidelity")
                         
-                        # Style Configuration
-                        style_ref = st.session_state.get('final_style_dna', "")
-                        if not style_ref:
-                            style_ref = "3D Pixar Animation Style. Cute, expressive, volumetric lighting, high fidelity CGI."
-
-                        inputs = [f"TASK: FINAL RENDER FROM SKETCH. STYLE: {style_ref}\n"]
-                        inputs.append(sketch_img)
-                        inputs.append(f"INSTRUCTION: This is the visual layout. Render this composition in the specified STYLE: {style_ref}.")
+                        inputs = [f"TASK: RENDER. STYLE: {style}", img_in]
                         
-                        if selected_free:
-                            inputs.append("CHARACTERS (Texture/Identity Ref):")
-                            for n in selected_free:
-                                inputs.append(st.session_state['roster'][n]['image'])
-                                inputs.append(f"ID: {n}.")
+                        if selected:
+                            inputs.append("CHARACTERS:")
+                            for n in selected:
+                                inputs.extend([st.session_state['roster'][n]['image'], f"ID: {n}."])
                         
-                        if free_prompt:
-                            inputs.append(f"SCENE DESCRIPTION: {free_prompt}")
+                        if prompt: inputs.append(f"SCENE: {prompt}")
+                        inputs.append("INSTRUCTION: Render composition in style.")
                         
-                        m = genai.GenerativeModel(FINAL_MODEL, safety_settings=SAFETY_SETTINGS, generation_config={"temperature": 0.3})
-                        r = m.generate_content(inputs)
+                        m = genai.GenerativeModel(FINAL_MODEL, safety_settings=SAFETY_SETTINGS)
+                        res = m.generate_content(inputs)
                         
-                        img = None
-                        if r.parts:
-                            for p in r.parts:
-                                if p.inline_data: img = Image.open(io.BytesIO(p.inline_data.data))
+                        img_out = None
+                        if res.parts:
+                            for p in res.parts:
+                                if p.inline_data: img_out = Image.open(io.BytesIO(p.inline_data.data))
                         
-                        if img:
-                            st.session_state['free_render'] = img
+                        if img_out:
+                            st.session_state['free_render'] = img_out
                             save_project()
                         else:
-                            st.warning("No render produced.")
+                            st.warning("Failed.")
                             
                     except Exception as e:
-                        st.error(f"Error: {e}")
-                        
-    with col_output:
-        if st.session_state.get('free_render'):
-            st.image(st.session_state['free_render'], caption="Free Render Result", use_container_width=True)
-            
-            # Download
-            buf = io.BytesIO()
-            st.session_state['free_render'].save(buf, format="PNG")
-            st.download_button(label="⬇️ Download Result", data=buf.getvalue(), file_name="free_render.png", mime="image/png", key="dl_free")
-        else:
-            st.info("Render result will appear here.")
+                        st.error(e)
 
-# =========================================================
-# TAB 3: FREE VIDEO STUDIO (VEO)
-# =========================================================
+    with col2:
+        if st.session_state.get('free_render'):
+            st.image(st.session_state['free_render'])
+            
+    # Video Section Placeholder (Simplified)
+    st.divider()
+    st.caption("Video Tools (Coming Soon)")
+
+# Video Tab (Placeholder)
 with tab_video:
-    st.header("🎥 Free Video Studio")
-    
-    st.info("🚧 UNDER CONSTRUCTION 🚧")
-    st.markdown("""
-    ### 🎬 Where's the camera?
-    
-    Our AI video director is currently **refusing to work**. 
-    
-    *   **"My artistic vision cannot be rushed!"** — *The AI Model*
-    *   **"I am not a content farm!"** — *Also The AI Model*
-    
-    We are currently negotiating with the GPUs. Please check back in a future update when everyone has had their coffee.
-    """)
-    
-    st.image("https://media.giphy.com/media/l0HlSi3AIOM3fAhX2/giphy.gif", caption="Live footage of our dev team fixing this.", width=400)
+    st.header("🎥 Video Generation")
+    st.info("Feature under construction.")

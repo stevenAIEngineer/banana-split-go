@@ -666,7 +666,7 @@ with tab_story:
                                     save_project()
                                     st.rerun()
                                 else:
-                                    st.error(f"No video returned. Debug: {operation.result}")
+                                    st.error(f"No video returned. Result: {operation.result} Error: {getattr(operation, 'error', 'None')}")
                             except Exception as e:
                                 st.error(str(e))
 
@@ -790,7 +790,7 @@ with tab_video:
                         st.session_state['free_video'] = uri
                         save_project()
                     else:
-                        st.error(f"No video returned. Debug: {operation.result}")
+                        st.error(f"No video returned. Result: {operation.result} Error: {getattr(operation, 'error', 'None')}")
                         
                 except Exception as e:
                     st.error(f"Error: {e}")

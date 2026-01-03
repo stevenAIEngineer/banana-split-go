@@ -124,15 +124,16 @@ with st.sidebar.form("new_char_form", clear_on_submit=True):
     c_name = st.text_input("Name")
     c_file = st.file_uploader("Reference Image", type=["jpg", "png"])
     if st.form_submit_button("Add") and c_name and c_file:
-        try:
-            img = Image.open(c_file).convert("RGB")
-            model = genai.GenerativeModel(ANALYSIS_MODEL)
-            res = model.generate_content(["Describe physical traits for consistency.", img])
-            st.session_state['roster'][c_name] = {"image": img, "dna": res.text}
-            save_project()
-            st.rerun()
-        except Exception as e:
-            st.error(e)
+        with st.spinner(f"Analyzing {c_name}..."):
+            try:
+                img = Image.open(c_file).convert("RGB")
+                model = genai.GenerativeModel(ANALYSIS_MODEL)
+                res = model.generate_content(["Describe physical traits for consistency.", img])
+                st.session_state['roster'][c_name] = {"image": img, "dna": res.text}
+                save_project()
+                st.rerun()
+            except Exception as e:
+                st.error(e)
 
 # List Characters
 if st.session_state['roster']:
@@ -141,9 +142,10 @@ if st.session_state['roster']:
         c1.image(data['image'])
         c2.write(f"**{name}**")
         if c2.button("Remove", key=f"del_{name}"):
-            del st.session_state['roster'][name]
-            save_project()
-            st.rerun()
+            with st.spinner("Removing..."):
+                del st.session_state['roster'][name]
+                save_project()
+                st.rerun()
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Style Config")
@@ -156,10 +158,11 @@ with tab1:
         s_img = Image.open(s_file).convert("RGB")
         st.image(s_img)
         if st.button("Analyze Sketch Style"):
-            m = genai.GenerativeModel(ANALYSIS_MODEL)
-            st.session_state['sketch_style_dna'] = m.generate_content(["Describe art style.", s_img]).text
-            save_project()
-            st.success("Style Locked!")
+            with st.spinner("Analyzing Sketch Style..."):
+                m = genai.GenerativeModel(ANALYSIS_MODEL)
+                st.session_state['sketch_style_dna'] = m.generate_content(["Describe art style.", s_img]).text
+                save_project()
+                st.success("Style Locked!")
 
 with tab2:
     f_file = st.file_uploader("Render Ref", type=["jpg", "png"], key="f_up")
@@ -167,10 +170,11 @@ with tab2:
         f_img = Image.open(f_file).convert("RGB")
         st.image(f_img)
         if st.button("Analyze Render Style"):
-            m = genai.GenerativeModel(ANALYSIS_MODEL)
-            st.session_state['final_style_dna'] = m.generate_content(["Describe art style.", f_img]).text
-            save_project()
-            st.success("Style Locked!")
+            with st.spinner("Analyzing Render Style..."):
+                m = genai.GenerativeModel(ANALYSIS_MODEL)
+                st.session_state['final_style_dna'] = m.generate_content(["Describe art style.", f_img]).text
+                save_project()
+                st.success("Style Locked!")
 
 
 
@@ -187,15 +191,16 @@ with tab_story:
         
         if st.button("Process Script"):
             if script_text:
-                try:
-                    model = genai.GenerativeModel(ANALYSIS_MODEL, generation_config={"response_mime_type": "application/json"})
-                    sys_p = "Convert to JSON list of shots (id, action, dialogue)."
-                    res = model.generate_content(f"{sys_p}\nSCRIPT:\n{script_text}")
-                    st.session_state['shots'] = json.loads(res.text)
-                    save_project()
-                    st.rerun()
-                except Exception as e:
-                    st.error(e)
+                with st.spinner("Breaking down script into shots..."):
+                    try:
+                        model = genai.GenerativeModel(ANALYSIS_MODEL, generation_config={"response_mime_type": "application/json"})
+                        sys_p = "Convert to JSON list of shots (id, action, dialogue)."
+                        res = model.generate_content(f"{sys_p}\nSCRIPT:\n{script_text}")
+                        st.session_state['shots'] = json.loads(res.text)
+                        save_project()
+                        st.rerun()
+                    except Exception as e:
+                        st.error(e)
 
     # Shot Generation Controls
     if st.session_state['shots']:

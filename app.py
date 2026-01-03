@@ -16,7 +16,6 @@ import json
 import io
 import pickle
 import time
-import base64
 
 # State Persistence
 STATE_FILE = "banana_state.pkl"
@@ -30,8 +29,7 @@ def save_project():
         "sketch_style_dna": st.session_state.get("sketch_style_dna", ""),
         "final_style_dna": st.session_state.get("final_style_dna", ""),
         "free_render": st.session_state.get("free_render", None),
-        "free_video": st.session_state.get("free_video", None),
-        "batch_jobs": st.session_state.get("batch_jobs", [])
+        "free_video": st.session_state.get("free_video", None)
     }
     with open(STATE_FILE, "wb") as f:
         pickle.dump(state_data, f)
@@ -49,7 +47,6 @@ def load_project():
                 st.session_state["final_style_dna"] = state_data.get("final_style_dna", "")
                 st.session_state["free_render"] = state_data.get("free_render", None)
                 st.session_state["free_video"] = state_data.get("free_video", None)
-                st.session_state["batch_jobs"] = state_data.get("batch_jobs", [])
         except Exception as e:
             st.warning(f"Could not load previous session: {e}")
 
@@ -71,8 +68,6 @@ if "shots" not in st.session_state:
     st.session_state["shots"] = []
 if "generated_images" not in st.session_state:
     st.session_state["generated_images"] = {}
-if "batch_jobs" not in st.session_state:
-    st.session_state["batch_jobs"] = []
 if "initialized" not in st.session_state:
     load_project()
     st.session_state["initialized"] = True
@@ -200,29 +195,51 @@ def check_batch_updates(api_key):
             # Poll Status
             refresh_job = client.batches.get(name=job_id)
             
-            if refresh_job.state == "SUCCEEDED":
+            # Check Status (Handle Enum or String)
+            state_str = str(refresh_job.state)
+            
+            if "SUCCEEDED" in state_str:
                 # Attempt to download results
-                # In new SDK, output_file_name usually points to a 'files/...' resource
-                # We can download it using client.files.content method?
-                # Method might be client.files.get_content? Or client.files.download?
-                # We will try to download the content.
-                try:
-                    # Output file might be in refresh_job.output_file or similar
-                    # Check properties:
-                    output_name = getattr(refresh_job, "output_file", None)
-                    if not output_name:
-                         # Fallback if attribute differs
-                         # Some versions use other fields.
-                         st.warning(f"Batch {job_id} succeeded but output file not found automatically.")
-                         job_info['status'] = 'COMPLETED (Unknown Output)'
-                         continue
+                output_name = None
+                
+                # 1. Try 'output_file' (Older SDKs)
+                output_name = getattr(refresh_job, "output_file", None)
+                
+                if not output_name:
+                     # 2. Try 'dest' attribute (Available in current SDK)
+                     dest_attr = getattr(refresh_job, "dest", None)
+                     if dest_attr:
+                         if hasattr(dest_attr, "name"):
+                             output_name = dest_attr.name
+                         else:
+                             output_name = str(dest_attr)
+                
+                if not output_name:
+                     # UI Debugging if still missing
+                     st.error(f"Job {job_id} Succeeded, but output link missing.")
+                     st.write("**Raw Job Data (for debugging):**")
+                     try:
+                         st.json(refresh_job.to_json_dict())
+                     except:
+                         st.write("Could not dump JSON.")
+                         st.code(str(dir(refresh_job)))
+                     
+                     job_info['status'] = 'COMPLETED (Unknown Output - See Debug)'
+                     continue
 
-                    # Download content (bytes)
-                    # client.files.content returns bytes
-                    file_content = client.files.content(name=output_name)
+                # Download content (bytes)
+                try:
+                    # Method: Get File Object -> URI -> HTTP GET
+                    file_obj = client.files.get(name=output_name)
+                    download_url = f"{file_obj.uri}?key={api_key}"
+                    
+                    resp = requests.get(download_url)
+                    if resp.status_code != 200:
+                        raise Exception(f"HTTP {resp.status_code}")
+                        
+                    file_content = resp.content # bytes
                     
                     # Parse JSONL
-                    # file_content is bytes, decode to string
                     text_content = file_content.decode("utf-8")
                     lines = text_content.strip().split("\n")
                     
@@ -238,34 +255,25 @@ def check_batch_updates(api_key):
                             idx = int(idx_str)
                             
                             # Extract Image
-                            # Structure: item['response']['candidates'][0]['content']['parts'][0]['text' or 'inline_data']
-                            # Note: The response inside JSONL matches standard generateContent response
                             response_pkl = item.get("response", {})
-                            # Usually serialized JSON response
                             
-                            # We need to dig deep safe-ly
                             try:
-                                # Candidate 1
                                 cand = response_pkl.get('candidates', [])[0]
                                 parts = cand.get('content', {}).get('parts', [])
                                 
                                 img_data = None
                                 for p in parts:
-                                    # Check for inline_data
                                     if 'inline_data' in p:
-                                        # Base64 decode
                                         b64_str = p['inline_data']['data']
                                         img_bytes = base64.b64decode(b64_str)
                                         img_data = Image.open(io.BytesIO(img_bytes))
                                         break
                                 
                                 if img_data:
-                                    # Save to Session
                                     if idx not in st.session_state['generated_images']: 
                                         st.session_state['generated_images'][idx] = {}
                                         
                                     target_key = "draft" if c_type == "sketch" else "final"
-                                    # Only update if empty or overwrite? Overwrite is expected.
                                     st.session_state['generated_images'][idx][target_key] = img_data
                                     success_items += 1
                                     
@@ -275,24 +283,28 @@ def check_batch_updates(api_key):
                     st.toast(f"Batch Completed! {success_items} shots updated.", icon="✅")
                     st.session_state["batch_jobs"].remove(job_info)
                     completed_count += 1
-                    
-                except Exception as dl_err:
-                    st.error(f"Download Failed for {job_id}: {dl_err}")
-                    job_info['status'] = 'COMPLETED (Download Failed)'
 
-            elif refresh_job.state == "FAILED":
+                except Exception as dl_err:
+                     st.error(f"Download Failed for {output_name}: {dl_err}")
+                     job_info['status'] = 'COMPLETED (Download Failed)'
+
+            elif "FAILED" in state_str:
                 job_info['status'] = f"FAILED: {refresh_job.error.message}"
                 st.session_state["batch_jobs"].remove(job_info)
                 st.error(f"Batch {job_id} Failed.")
                 
             else:
-                job_info['status'] = refresh_job.state 
+                job_info['status'] = state_str 
                 
         except Exception as e:
             print(f"Batch Check Error: {e}")
             
     save_project()
     return completed_count
+
+# ---------------------------------------------------------
+# UI START
+# ---------------------------------------------------------
 
 st.sidebar.title("🍌 Banana Split")
 
@@ -450,57 +462,6 @@ with tab_story:
     # GALLERY
     if st.session_state['shots']:
         st.subheader(f"Shot List ({len(st.session_state['shots'])})")
-        
-        # Async Batching
-        with st.expander("⚡ Batch Operations (Async)", expanded=False):
-            st.caption("Submit all shots to Google's Batch API (Time-insensitive).")
-            b1, b2, b3 = st.columns([1,1,2])
-            
-            with b1:
-                if st.button("✨ Batch Sketch All", use_container_width=True):
-                    with st.spinner("Submitting Sketch Job..."):
-                        job, err = submit_batch_job("sketch", api_key)
-                        if job:
-                            st.session_state["batch_jobs"].append({
-                                "id": job.name,
-                                "type": "sketch",
-                                "status": "PENDING",
-                                "timestamp": time.time()
-                            })
-                            save_project()
-                            st.success(f"Job Sent! ID: {job.name.split('/')[-1]}")
-                        else:
-                            st.error(f"Failed: {err}")
-
-            with b2:
-                if st.button("🎬 Batch Render All", use_container_width=True):
-                    with st.spinner("Submitting Render Job..."):
-                        job, err = submit_batch_job("final", api_key)
-                        if job:
-                            st.session_state["batch_jobs"].append({
-                                "id": job.name,
-                                "type": "final",
-                                "status": "PENDING",
-                                "timestamp": time.time()
-                            })
-                            save_project()
-                            st.success(f"Job Sent! ID: {job.name.split('/')[-1]}")
-                        else:
-                            st.error(f"Failed: {err}")
-            
-            with b3:
-                if st.session_state["batch_jobs"]:
-                    st.write(f"**Active Jobs: {len(st.session_state['batch_jobs'])}**")
-                    if st.button("🔄 Check Status"):
-                         with st.spinner("Checking cloud..."):
-                             done = check_batch_updates(api_key)
-                             if done > 0: st.rerun()
-                             else: st.info("No jobs completed yet.")
-                    
-                    for j in st.session_state["batch_jobs"]:
-                        st.text(f"{j['type'].upper()}: {j['status']}")
-                else:
-                    st.info("No active batch jobs.")
         
         st.markdown("---")
 

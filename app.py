@@ -340,7 +340,10 @@ with tab_story:
                 with st.spinner("Breaking down script into shots..."):
                     try:
                         model = genai.GenerativeModel(ANALYSIS_MODEL, generation_config={"response_mime_type": "application/json"})
-                        sys_p = "Convert to JSON list of shots (id, action, dialogue)."
+                        sys_p = """Convert to JSON list of shots (id, action, dialogue).
+                        CRITICAL SAFETY RULE: You must anonymize ALL references to real celebrities, politicians, or public figures in the 'action' descriptions.
+                        Replace them with generic descriptions (e.g. 'President Trump' -> 'A boisterous man in a suit', 'Elon Musk' -> 'A tech billionaire').
+                        This is required for downstream video generation. Do not fail, just rewrite nicely."""
                         res = model.generate_content(f"{sys_p}\nSCRIPT:\n{script_text}")
                         st.session_state['shots'] = json.loads(res.text)
                         save_project()

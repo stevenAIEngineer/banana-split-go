@@ -17,6 +17,7 @@ import time
 import asyncio
 import uuid
 import zipfile
+import requests
 from concurrent.futures import ThreadPoolExecutor
 
 # Constants
@@ -110,6 +111,21 @@ if not video_api_key:
     video_api_key = api_key # Fallback
 
 genai.configure(api_key=api_key)
+
+def download_video(uri):
+    """Downloads video bytes to bypass 403 Forbidden on client-side."""
+    try:
+        # If API URI, likely needs key
+        params = {}
+        if "googleapis.com" in uri and "key=" not in uri:
+            params['key'] = api_key
+            
+        res = requests.get(uri, params=params)
+        if res.status_code == 200:
+            return res.content
+    except Exception as e:
+        print(f"DL Error: {e}")
+    return uri # Fallback to URI
 
 def start_veo_job(prompt, image_input=None):
     """
@@ -457,12 +473,12 @@ with tab_story:
                             operation = client.operations.get(operation)
                             
                         if operation.result and operation.result.generated_videos:
-                            return idx, operation.result.generated_videos[0].video.uri, None
+                            return idx, download_video(operation.result.generated_videos[0].video.uri), None
                         
                         if getattr(operation.result, 'rai_media_filtered_reasons', None):
                             return idx, None, f"Blocked: {operation.result.rai_media_filtered_reasons[0]}"
 
-                        return idx, None, f"No video response. Raw: {operation.result}"
+                        return idx, None, f"No video. Res: {operation.result} Err: {getattr(operation, 'error', 'None')}"
 
                     except Exception as e:
                         return idx, None, str(e)
@@ -662,17 +678,16 @@ with tab_story:
                                     operation = client.operations.get(operation)
                                 
                                 if operation.result and operation.result.generated_videos:
-                                    vid_uri = operation.result.generated_videos[0].video.uri
+                                    vid_uri = download_video(operation.result.generated_videos[0].video.uri)
                                     if i not in st.session_state['generated_videos']:
                                         st.session_state['generated_videos'][i] = {}
                                     st.session_state['generated_videos'][i] = vid_uri
                                     save_project()
                                     st.rerun()
-                                else:
                                 elif operation.result and getattr(operation.result, 'rai_media_filtered_reasons', None):
                                     st.warning(f"Video Blocked by Safety Filter: {operation.result.rai_media_filtered_reasons[0]}")
                                 else:
-                                    st.error(f"No video returned. Debug: {operation.result}")
+                                    st.error(f"Failed. Res: {operation.result} | Err: {getattr(operation, 'error', 'None')}")
                             except Exception as e:
                                 st.error(str(e))
 
@@ -792,14 +807,13 @@ with tab_video:
                         operation = client.operations.get(operation)
                         
                     if operation.result and operation.result.generated_videos:
-                        uri = operation.result.generated_videos[0].video.uri
+                        uri = download_video(operation.result.generated_videos[0].video.uri)
                         st.session_state['free_video'] = uri
                         save_project()
-                    else:
                     elif operation.result and getattr(operation.result, 'rai_media_filtered_reasons', None):
                         st.warning(f"Video Blocked by Safety Filter: {operation.result.rai_media_filtered_reasons[0]}")
                     else:
-                        st.error(f"No video returned. Debug: {operation.result}")
+                        st.error(f"Failed. Res: {operation.result} | Err: {getattr(operation, 'error', 'None')}")
                         
                 except Exception as e:
                     st.error(f"Error: {e}")

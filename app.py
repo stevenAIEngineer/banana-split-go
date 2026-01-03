@@ -105,6 +105,7 @@ defaults = {
     "roster": {},
     "shots": [],
     "generated_images": {},
+    "generated_videos": {},
     "batch_jobs": []
 }
 
@@ -536,7 +537,83 @@ with tab_free:
     st.divider()
     st.caption("Video Tools (Coming Soon)")
 
-# Video Tab (Placeholder)
+# Video Tab
 with tab_video:
     st.header("🎥 Video Generation")
-    st.info("Feature under construction.")
+    
+    if st.button("Generate Videos (Batch)", type="primary"):
+        if not st.session_state["shots"]:
+            st.warning("No shots to process.")
+        else:
+            def generate_single_video(idx, shot):
+                try:
+                    # 1. Get Image
+                    img_data = st.session_state.get('generated_images', {}).get(idx, {})
+                    final_img = img_data.get('final')
+                    
+                    if not final_img:
+                        return idx, None, "No final render found for this shot."
+
+                    # 2. Setup Prompt
+                    prompt_text = f" Cinematic movement. {shot.get('action', '')}"
+                    
+                    # 3. Call SDK (Veo)
+                    client = genai_client_lib.Client(api_key=api_key)
+                    
+                    # Convert PIL to specific format if needed, but SDK often handles PIL or bytes.
+                    # We might need to save to a temp file or BytesIO? 
+                    # The V1 SDK supports PIL images.
+                    
+                    operation = client.models.generate_videos(
+                        model=VIDEO_MODEL,
+                        prompt=prompt_text,
+                        image=final_img,
+                        config={"fps": 24, "duration_seconds": 5} 
+                    )
+                    
+                    # 4. Polling Pattern
+                    while not operation.done:
+                        time.sleep(10)
+                        operation = client.operations.get(operation)
+                        
+                    # 5. Extract Result
+                    if operation.result and operation.result.generated_videos:
+                        video_uri = operation.result.generated_videos[0].video.uri
+                        return idx, video_uri, None
+                    else:
+                        return idx, None, "No video returned."
+
+                except Exception as e:
+                    return idx, None, str(e)
+
+            with st.spinner("Generating Videos... This may take a while."):
+                current_videos = st.session_state.get('generated_videos', {})
+                
+                # Using max_workers=2 as requested to respect rate limits
+                with ThreadPoolExecutor(max_workers=2) as exe:
+                    futures = [exe.submit(generate_single_video, i, s) for i, s in enumerate(st.session_state['shots'])]
+                    
+                    for f in futures:
+                        i, vid_uri, err = f.result()
+                        if vid_uri:
+                            if i not in st.session_state['generated_videos']:
+                                st.session_state['generated_videos'][i] = {}
+                            st.session_state['generated_videos'][i] = vid_uri
+                        elif err:
+                            st.error(f"Shot {i+1} Failed: {err}")
+                
+                save_project()
+                st.success("Batch Video Generation Complete!")
+                st.rerun()
+
+    st.divider()
+    
+    # Display Videos
+    if st.session_state.get('generated_videos'):
+        for i, uri in st.session_state['generated_videos'].items():
+             with st.container():
+                st.subheader(f"Shot {int(i)+1}")
+                st.video(uri)
+                st.divider()
+    else:
+        st.info("Generated videos will appear here.")

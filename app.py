@@ -15,13 +15,18 @@ import io
 import pickle
 import time
 import asyncio
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 
 # Constants
+SESSIONS_DIR = "sessions"
 ANALYSIS_MODEL = "gemini-2.0-flash-exp" 
 DRAFT_MODEL = "gemini-3-pro-image-preview"
 FINAL_MODEL = "gemini-3-pro-image-preview"
 VIDEO_MODEL = "veo-3.1-generate-preview"
+
+# Ensure sessions directory exists
+os.makedirs(SESSIONS_DIR, exist_ok=True)
 
 # Safety Config
 SAFETY_SETTINGS = [
@@ -31,9 +36,51 @@ SAFETY_SETTINGS = [
     {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
 ]
 
-# State Management (RAM Only + Manual Export)
+# Session & State Management
+def get_session_id():
+    query_params = st.query_params
+    if "session_id" not in query_params:
+        new_id = str(uuid.uuid4())[:8]
+        st.query_params["session_id"] = new_id
+        return new_id
+    return query_params["session_id"]
+
+def get_state_path(session_id):
+    return os.path.join(SESSIONS_DIR, f"state_{session_id}.pkl")
+
+def save_project():
+    """Auto-saves current state to server disk keyed by session_id."""
+    session_id = get_session_id()
+    state = {
+        "roster": st.session_state.get("roster", {}),
+        "shots": st.session_state.get("shots", []),
+        "generated_images": st.session_state.get("generated_images", {}),
+        "sketch_style_dna": st.session_state.get("sketch_style_dna", ""),
+        "final_style_dna": st.session_state.get("final_style_dna", ""),
+        "free_render": st.session_state.get("free_render", None),
+        "free_video": st.session_state.get("free_video", None)
+    }
+    try:
+        with open(get_state_path(session_id), "wb") as f:
+            pickle.dump(state, f)
+    except Exception as e:
+        print(f"Auto-save failed: {e}")
+
+def load_project_from_disk():
+    session_id = get_session_id()
+    path = get_state_path(session_id)
+    if os.path.exists(path):
+        try:
+            with open(path, "rb") as f:
+                data = pickle.load(f)
+                st.session_state.update(data)
+                return True
+        except Exception:
+            return False
+    return False
+
 def get_state_bytes():
-    """Serializes the current session state for download."""
+    """Serializes for manual download."""
     state = {
         "roster": st.session_state.get("roster", {}),
         "shots": st.session_state.get("shots", []),
@@ -51,7 +98,7 @@ def get_state_bytes():
 st.set_page_config(page_title="Banana Split Studio", layout="wide", page_icon="🍌")
 load_dotenv()
 
-# Initialize Session State (Per User, Per Browser Tab)
+# Initialize Session State
 defaults = {
     "sketch_style_dna": "",
     "final_style_dna": "",
@@ -65,11 +112,18 @@ for k, v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
-st.session_state["initialized"] = True
-
+# Magic Load on Startup
+if "initialized" not in st.session_state:
+    if load_project_from_disk():
+        st.toast("Welcome back! Session restored. 🍌")
+    st.session_state["initialized"] = True
 
 # Sidebar
 st.sidebar.title("🍌 Banana Split")
+
+# Display Session Info
+st.sidebar.caption(f"ID: `{get_session_id()}`")
+st.sidebar.info("Bookmark this URL to return to this session!")
 
 env_key = os.getenv("GOOGLE_API_KEY")
 api_key = env_key
@@ -85,25 +139,24 @@ except Exception as e:
 st.sidebar.markdown("---")
 
 # Data Management
-with st.sidebar.expander("⚙️ Manage Data (Save/Load)"):
-    st.caption("Data is isolated to this tab. Download a backup to save your work!")
-    
-    # Download Button (Manual Save)
+with st.sidebar.expander("⚙️ Manage Data"):
+    # Download Button (Manual Backup)
     st.download_button(
         label="💾 Download Backup", 
         data=get_state_bytes(),
-        file_name="my_banana_project.pkl",
+        file_name=f"banana_{get_session_id()}.pkl",
         mime="application/octet-stream",
-        help="Download your current work to your computer."
+        help="Ideally save this just in case the server restarts!"
     )
 
-    # Restore (Manual Load)
+    # Restore (Manual Load from file)
     uploaded_state = st.file_uploader("Restore Backup", type=["pkl"], label_visibility="collapsed")
     if uploaded_state:
         if st.button("⚠️ Load Restore File"):
             try:
                 data = pickle.load(uploaded_state)
                 st.session_state.update(data)
+                save_project() # immediately save to current session ID
                 st.session_state["initialized"] = False
                 st.rerun()
             except Exception as e:
@@ -114,15 +167,18 @@ with st.sidebar.expander("⚙️ Manage Data (Save/Load)"):
     c1, c2 = st.columns(2)
     if c1.button("Clear Cast"):
         st.session_state["roster"] = {}
+        save_project()
         st.rerun()
     if c2.button("Clear Styles"):
         st.session_state["sketch_style_dna"] = ""
         st.session_state["final_style_dna"] = ""
+        save_project()
         st.rerun()
     
     if st.button("Clear All Data", type="primary"):
         for k in defaults.keys():
             st.session_state[k] = defaults[k].copy() if isinstance(defaults[k], (dict, list)) else defaults[k]
+        save_project()
         st.rerun()
 
 st.sidebar.markdown("---")
@@ -139,6 +195,7 @@ with st.sidebar.form("new_char_form", clear_on_submit=True):
                 model = genai.GenerativeModel(ANALYSIS_MODEL)
                 res = model.generate_content(["Describe physical traits for consistency.", img])
                 st.session_state['roster'][c_name] = {"image": img, "dna": res.text}
+                save_project()
                 st.rerun()
             except Exception as e:
                 st.error(e)
@@ -152,6 +209,7 @@ if st.session_state['roster']:
         if c2.button("Remove", key=f"del_{name}"):
             with st.spinner("Removing..."):
                 del st.session_state['roster'][name]
+                save_project()
                 st.rerun()
 
 st.sidebar.markdown("---")
@@ -168,6 +226,7 @@ with tab1:
             with st.spinner("Analyzing Sketch Style..."):
                 m = genai.GenerativeModel(ANALYSIS_MODEL)
                 st.session_state['sketch_style_dna'] = m.generate_content(["Describe art style.", s_img]).text
+                save_project()
                 st.success("Style Locked!")
 
 with tab2:
@@ -179,6 +238,7 @@ with tab2:
             with st.spinner("Analyzing Render Style..."):
                 m = genai.GenerativeModel(ANALYSIS_MODEL)
                 st.session_state['final_style_dna'] = m.generate_content(["Describe art style.", f_img]).text
+                save_project()
                 st.success("Style Locked!")
 
 
@@ -202,6 +262,7 @@ with tab_story:
                         sys_p = "Convert to JSON list of shots (id, action, dialogue)."
                         res = model.generate_content(f"{sys_p}\nSCRIPT:\n{script_text}")
                         st.session_state['shots'] = json.loads(res.text)
+                        save_project()
                         st.rerun()
                     except Exception as e:
                         st.error(e)
@@ -254,6 +315,7 @@ with tab_story:
                                     st.session_state['generated_images'][i] = {}
                                 st.session_state['generated_images'][i]['draft'] = img
                     
+                    save_project()
                     st.rerun()
 
             # Generate Renders
@@ -301,6 +363,7 @@ with tab_story:
                                     st.session_state['generated_images'][i] = {}
                                 st.session_state['generated_images'][i]['final'] = img
                     
+                    save_project()
                     st.rerun()
 
         st.divider()
@@ -316,6 +379,7 @@ with tab_story:
                 # Action Editor
                 def update_action():
                     st.session_state['shots'][i]['action'] = st.session_state[f"action_{i}"]
+                    save_project()
                     
                 action_val = st.text_area("Action", value=shot.get('action'), key=f"action_{i}", height=100, on_change=update_action)
                 
@@ -348,6 +412,7 @@ with tab_story:
                             if img: 
                                 if i not in st.session_state['generated_images']: st.session_state['generated_images'][i] = {}
                                 st.session_state['generated_images'][i]['draft'] = img
+                                save_project()
                                 st.rerun()
                         except Exception as e:
                             st.error(e)
@@ -382,6 +447,7 @@ with tab_story:
                             if img: 
                                 if i not in st.session_state['generated_images']: st.session_state['generated_images'][i] = {}
                                 st.session_state['generated_images'][i]['final'] = img
+                                save_project()
                                 st.rerun()
                         except Exception as e:
                             st.error(e)
@@ -455,6 +521,7 @@ with tab_free:
                         
                         if img_out:
                             st.session_state['free_render'] = img_out
+                            save_project()
                         else:
                             st.warning("Failed.")
                             

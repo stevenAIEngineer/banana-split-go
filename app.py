@@ -392,7 +392,7 @@ with tab_story:
                             model=VIDEO_MODEL,
                             prompt=prompt_text,
                             image=final_img,
-                            config={"fps": 24, "duration_seconds": 5} 
+                            config={"duration_seconds": 5} 
                         )
                         
                         while not operation.done:
@@ -600,7 +600,7 @@ with tab_story:
                                     model=VIDEO_MODEL,
                                     prompt=prompt_text,
                                     image=final_img,
-                                    config={"fps": 24, "duration_seconds": 5} 
+                                    config={"duration_seconds": 5} 
                                 )
                                 
                                 while not operation.done:
@@ -733,7 +733,7 @@ with tab_video:
                         model=VIDEO_MODEL,
                         prompt=v_prompt,
                         image=pil_img,
-                        config={"fps": 24, "duration_seconds": 5} 
+                        config={"duration_seconds": 5} 
                     )
                     
                     # Poll

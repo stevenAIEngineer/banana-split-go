@@ -22,9 +22,9 @@ from concurrent.futures import ThreadPoolExecutor
 
 # Constants
 SESSIONS_DIR = "sessions"
-ANALYSIS_MODEL = "gemini-2.0-flash-exp" 
-DRAFT_MODEL = "gemini-3-pro-image-preview"
-FINAL_MODEL = "gemini-3-pro-image-preview"
+ANALYSIS_MODEL = "gemini-1.5-flash" 
+DRAFT_MODEL = "gemini-1.5-flash"
+FINAL_MODEL = "gemini-1.5-pro"
 VIDEO_MODEL = "veo-3.1-generate-preview"
 
 # Ensure sessions directory exists

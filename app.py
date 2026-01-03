@@ -459,6 +459,9 @@ with tab_story:
                         if operation.result and operation.result.generated_videos:
                             return idx, operation.result.generated_videos[0].video.uri, None
                         
+                        if getattr(operation.result, 'rai_media_filtered_reasons', None):
+                            return idx, None, f"Blocked: {operation.result.rai_media_filtered_reasons[0]}"
+
                         return idx, None, f"No video response. Raw: {operation.result}"
 
                     except Exception as e:
@@ -666,7 +669,10 @@ with tab_story:
                                     save_project()
                                     st.rerun()
                                 else:
-                                    st.error(f"No video returned. Result: {operation.result} Error: {getattr(operation, 'error', 'None')}")
+                                elif operation.result and getattr(operation.result, 'rai_media_filtered_reasons', None):
+                                    st.warning(f"Video Blocked by Safety Filter: {operation.result.rai_media_filtered_reasons[0]}")
+                                else:
+                                    st.error(f"No video returned. Debug: {operation.result}")
                             except Exception as e:
                                 st.error(str(e))
 
@@ -790,7 +796,10 @@ with tab_video:
                         st.session_state['free_video'] = uri
                         save_project()
                     else:
-                        st.error(f"No video returned. Result: {operation.result} Error: {getattr(operation, 'error', 'None')}")
+                    elif operation.result and getattr(operation.result, 'rai_media_filtered_reasons', None):
+                        st.warning(f"Video Blocked by Safety Filter: {operation.result.rai_media_filtered_reasons[0]}")
+                    else:
+                        st.error(f"No video returned. Debug: {operation.result}")
                         
                 except Exception as e:
                     st.error(f"Error: {e}")

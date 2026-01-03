@@ -16,6 +16,7 @@ import pickle
 import time
 import asyncio
 import uuid
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
 
 # Constants
@@ -430,6 +431,74 @@ with tab_story:
                         time.sleep(1)
                         st.rerun()
 
+        st.divider()
+
+        # Bulk Export Section
+        with st.expander("📂 Bulk Exports (ZIP/Links)", expanded=False):
+            exp_c1, exp_c2, exp_c3 = st.columns(3)
+            
+            # Helper for Images
+            def create_zip(target_type):
+                buf = io.BytesIO()
+                has_files = False
+                with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                    for i, data in st.session_state['generated_images'].items():
+                        if target_type in data:
+                            img = data[target_type]
+                            img_buf = io.BytesIO()
+                            img.save(img_buf, format="PNG")
+                            zf.writestr(f"shot_{int(i)+1}_{target_type}.png", img_buf.getvalue())
+                            has_files = True
+                if has_files:
+                    buf.seek(0)
+                    return buf
+                return None
+
+            # 1. Sketches
+            zip_sketches = create_zip('draft')
+            if zip_sketches:
+                exp_c1.download_button(
+                    "📦 All Sketches (.zip)", 
+                    data=zip_sketches, 
+                    file_name="sketches.zip", 
+                    mime="application/zip"
+                )
+            else:
+                exp_c1.button("📦 All Sketches", disabled=True)
+
+            # 2. Renders
+            zip_finals = create_zip('final')
+            if zip_finals:
+                exp_c2.download_button(
+                    "📦 All Renders (.zip)", 
+                    data=zip_finals, 
+                    file_name="renders.zip", 
+                    mime="application/zip"
+                )
+            else:
+                exp_c2.button("📦 All Renders", disabled=True)
+
+            # 3. Videos (HTML Playlist)
+            def create_video_list():
+                if not st.session_state['generated_videos']: return None
+                html = "<html><body><h1>Generated Videos</h1><ul>"
+                for i, uri in st.session_state['generated_videos'].items():
+                    html += f"<li><h3>Shot {int(i)+1}</h3><a href='{uri}'>Download Video Link</a><br><video width='320' height='240' controls><source src='{uri}' type='video/mp4'></video></li>"
+                html += "</ul></body></html>"
+                return html.encode('utf-8')
+            
+            vid_list = create_video_list()
+            if vid_list:
+                exp_c3.download_button(
+                    "🔗 All Videos (Playlist)", 
+                    data=vid_list, 
+                    file_name="video_playlist.html", 
+                    mime="text/html",
+                    help="Downloads an HTML file with links to all your generated videos."
+                )
+            else:
+                 exp_c3.button("🔗 All Videos", disabled=True)
+        
         st.divider()
         # ---------------------------------------------------------
 

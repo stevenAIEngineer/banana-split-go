@@ -18,7 +18,6 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
 # Constants
-STATE_FILE = "banana_state.pkl"
 ANALYSIS_MODEL = "gemini-2.0-flash-exp" 
 DRAFT_MODEL = "gemini-3-pro-image-preview"
 FINAL_MODEL = "gemini-3-pro-image-preview"
@@ -32,7 +31,9 @@ SAFETY_SETTINGS = [
     {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
 ]
 
-def save_project():
+# State Management (RAM Only + Manual Export)
+def get_state_bytes():
+    """Serializes the current session state for download."""
     state = {
         "roster": st.session_state.get("roster", {}),
         "shots": st.session_state.get("shots", []),
@@ -42,22 +43,15 @@ def save_project():
         "free_render": st.session_state.get("free_render", None),
         "free_video": st.session_state.get("free_video", None)
     }
-    with open(STATE_FILE, "wb") as f:
-        pickle.dump(state, f)
-
-def load_project():
-    if os.path.exists(STATE_FILE):
-        try:
-            with open(STATE_FILE, "rb") as f:
-                data = pickle.load(f)
-                st.session_state.update(data)
-        except Exception as e:
-            st.warning(f"Error loading state: {e}")
+    buffer = io.BytesIO()
+    pickle.dump(state, buffer)
+    buffer.seek(0)
+    return buffer
 
 st.set_page_config(page_title="Banana Split Studio", layout="wide", page_icon="🍌")
 load_dotenv()
 
-# Initialize State
+# Initialize Session State (Per User, Per Browser Tab)
 defaults = {
     "sketch_style_dna": "",
     "final_style_dna": "",
@@ -71,11 +65,7 @@ for k, v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
-if "initialized" not in st.session_state:
-    load_project()
-    st.session_state["initialized"] = True
-
-
+st.session_state["initialized"] = True
 
 
 # Sidebar
@@ -95,55 +85,45 @@ except Exception as e:
 st.sidebar.markdown("---")
 
 # Data Management
-with st.sidebar.expander("⚙️ Manage Data"):
-    c1, c2 = st.columns(2)
-    if c1.button("Clear Cast"):
-        st.session_state["roster"] = {}
-        save_project()
-        st.rerun()
-    if c2.button("Clear Styles"):
-        st.session_state["sketch_style_dna"] = ""
-        st.session_state["final_style_dna"] = ""
-        save_project()
-        st.rerun()
+with st.sidebar.expander("⚙️ Manage Data (Save/Load)"):
+    st.caption("Data is isolated to this tab. Download a backup to save your work!")
     
-    if st.button("Clear All Data", type="primary"):
-        st.session_state["roster"] = {}
-        st.session_state["shots"] = []
-        st.session_state["generated_images"] = {}
-        st.session_state["sketch_style_dna"] = ""
-        st.session_state["final_style_dna"] = ""
-        save_project()
-        st.rerun()
+    # Download Button (Manual Save)
+    st.download_button(
+        label="💾 Download Backup", 
+        data=get_state_bytes(),
+        file_name="my_banana_project.pkl",
+        mime="application/octet-stream",
+        help="Download your current work to your computer."
+    )
 
-    st.markdown("---")
-    st.caption("📦 Backup & Restore")
-    
-    # Backup
-    if os.path.exists(STATE_FILE):
-        with open(STATE_FILE, "rb") as f:
-            st.download_button(
-                label="💾 Download Project Backup", 
-                data=f,
-                file_name="banana_split_backup.pkl",
-                mime="application/octet-stream",
-                help="Download your entire project state to save it locally."
-            )
-    
-    # Restore
-    uploaded_state = st.file_uploader("Restore Project", type=["pkl"], label_visibility="collapsed")
+    # Restore (Manual Load)
+    uploaded_state = st.file_uploader("Restore Backup", type=["pkl"], label_visibility="collapsed")
     if uploaded_state:
-        if st.button("⚠️ Restore from Backup"):
+        if st.button("⚠️ Load Restore File"):
             try:
-                # Save uploaded file to disk
-                with open(STATE_FILE, "wb") as f:
-                    f.write(uploaded_state.getbuffer())
-                
-                # Reload
+                data = pickle.load(uploaded_state)
+                st.session_state.update(data)
                 st.session_state["initialized"] = False
                 st.rerun()
             except Exception as e:
                 st.error(f"Restore failed: {e}")
+
+    st.divider()
+
+    c1, c2 = st.columns(2)
+    if c1.button("Clear Cast"):
+        st.session_state["roster"] = {}
+        st.rerun()
+    if c2.button("Clear Styles"):
+        st.session_state["sketch_style_dna"] = ""
+        st.session_state["final_style_dna"] = ""
+        st.rerun()
+    
+    if st.button("Clear All Data", type="primary"):
+        for k in defaults.keys():
+            st.session_state[k] = defaults[k].copy() if isinstance(defaults[k], (dict, list)) else defaults[k]
+        st.rerun()
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Cast Roster")
@@ -159,7 +139,6 @@ with st.sidebar.form("new_char_form", clear_on_submit=True):
                 model = genai.GenerativeModel(ANALYSIS_MODEL)
                 res = model.generate_content(["Describe physical traits for consistency.", img])
                 st.session_state['roster'][c_name] = {"image": img, "dna": res.text}
-                save_project()
                 st.rerun()
             except Exception as e:
                 st.error(e)
@@ -173,7 +152,6 @@ if st.session_state['roster']:
         if c2.button("Remove", key=f"del_{name}"):
             with st.spinner("Removing..."):
                 del st.session_state['roster'][name]
-                save_project()
                 st.rerun()
 
 st.sidebar.markdown("---")
@@ -190,7 +168,6 @@ with tab1:
             with st.spinner("Analyzing Sketch Style..."):
                 m = genai.GenerativeModel(ANALYSIS_MODEL)
                 st.session_state['sketch_style_dna'] = m.generate_content(["Describe art style.", s_img]).text
-                save_project()
                 st.success("Style Locked!")
 
 with tab2:
@@ -202,7 +179,6 @@ with tab2:
             with st.spinner("Analyzing Render Style..."):
                 m = genai.GenerativeModel(ANALYSIS_MODEL)
                 st.session_state['final_style_dna'] = m.generate_content(["Describe art style.", f_img]).text
-                save_project()
                 st.success("Style Locked!")
 
 
@@ -226,7 +202,6 @@ with tab_story:
                         sys_p = "Convert to JSON list of shots (id, action, dialogue)."
                         res = model.generate_content(f"{sys_p}\nSCRIPT:\n{script_text}")
                         st.session_state['shots'] = json.loads(res.text)
-                        save_project()
                         st.rerun()
                     except Exception as e:
                         st.error(e)
@@ -279,7 +254,6 @@ with tab_story:
                                     st.session_state['generated_images'][i] = {}
                                 st.session_state['generated_images'][i]['draft'] = img
                     
-                    save_project()
                     st.rerun()
 
             # Generate Renders
@@ -327,7 +301,6 @@ with tab_story:
                                     st.session_state['generated_images'][i] = {}
                                 st.session_state['generated_images'][i]['final'] = img
                     
-                    save_project()
                     st.rerun()
 
         st.divider()
@@ -343,7 +316,6 @@ with tab_story:
                 # Action Editor
                 def update_action():
                     st.session_state['shots'][i]['action'] = st.session_state[f"action_{i}"]
-                    save_project()
                     
                 action_val = st.text_area("Action", value=shot.get('action'), key=f"action_{i}", height=100, on_change=update_action)
                 
@@ -376,7 +348,6 @@ with tab_story:
                             if img: 
                                 if i not in st.session_state['generated_images']: st.session_state['generated_images'][i] = {}
                                 st.session_state['generated_images'][i]['draft'] = img
-                                save_project()
                                 st.rerun()
                         except Exception as e:
                             st.error(e)
@@ -411,7 +382,6 @@ with tab_story:
                             if img: 
                                 if i not in st.session_state['generated_images']: st.session_state['generated_images'][i] = {}
                                 st.session_state['generated_images'][i]['final'] = img
-                                save_project()
                                 st.rerun()
                         except Exception as e:
                             st.error(e)
@@ -485,7 +455,6 @@ with tab_free:
                         
                         if img_out:
                             st.session_state['free_render'] = img_out
-                            save_project()
                         else:
                             st.warning("Failed.")
                             

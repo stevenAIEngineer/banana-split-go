@@ -111,6 +111,44 @@ if not video_api_key:
 
 genai.configure(api_key=api_key)
 
+def start_veo_job(prompt, image_input=None):
+    """
+    Attempts to start a Veo job using multiple auth methods.
+    Returns: (client, operation)
+    """
+    # Config (No FPS, as it is unsupported)
+    cfg = {"duration_seconds": 5}
+    errors = []
+
+    # 1. Try Standard API Key
+    try:
+        c = genai_client_lib.Client(api_key=api_key)
+        op = c.models.generate_videos(model=VIDEO_MODEL, prompt=prompt, image=image_input, config=cfg)
+        return c, op
+    except Exception as e:
+        errors.append(f"StandardKey: {e}")
+
+    # 2. Try Video API Key (if different)
+    if video_api_key and video_api_key != api_key:
+        try:
+            c = genai_client_lib.Client(api_key=video_api_key)
+            op = c.models.generate_videos(model=VIDEO_MODEL, prompt=prompt, image=image_input, config=cfg)
+            return c, op
+        except Exception as e:
+            errors.append(f"VideoKey: {e}")
+
+    # 3. Try Vertex AI (ADC - Auto-Auth)
+    try:
+        # Vertex AI requires project/location context usually, but SDK might infer from environment
+        c = genai_client_lib.Client(vertexai=True, location="us-central1")
+        op = c.models.generate_videos(model=VIDEO_MODEL, prompt=prompt, image=image_input, config=cfg)
+        return c, op
+    except Exception as e:
+        errors.append(f"VertexAI: {e}")
+    
+    # Failure
+    raise Exception(f"Veo start failed. Auth methods tried: {errors}")
+
 # Initialize Session State
 defaults = {
     "sketch_style_dna": "",
@@ -398,14 +436,8 @@ with tab_story:
                             return idx, None, "No final render found."
 
                         prompt_text = f"Cinematic movement. {shot.get('action', '')}"
-                        client = genai_client_lib.Client(api_key=video_api_key)
                         
-                        operation = client.models.generate_videos(
-                            model=VIDEO_MODEL,
-                            prompt=prompt_text,
-                            image=final_img,
-                            config={"duration_seconds": 5} 
-                        )
+                        client, operation = start_veo_job(prompt_text, final_img)
                         
                         while not operation.done:
                             time.sleep(10)
@@ -606,14 +638,7 @@ with tab_story:
                         with st.spinner("Generating Video..."):
                             try:
                                 prompt_text = f"Cinematic movement. {shot.get('action', '')}"
-                                client = genai_client_lib.Client(api_key=video_api_key)
-                                
-                                operation = client.models.generate_videos(
-                                    model=VIDEO_MODEL,
-                                    prompt=prompt_text,
-                                    image=final_img,
-                                    config={"duration_seconds": 5} 
-                                )
+                                client, operation = start_veo_job(prompt_text, final_img)
                                 
                                 while not operation.done:
                                     time.sleep(10)
@@ -734,19 +759,12 @@ with tab_video:
         if st.button("Generate Video", type="primary", key="gen_free_vid"):
             with st.spinner("Generating Video... (Approx. 1-2 mins)"):
                 try:
-                    client = genai_client_lib.Client(api_key=video_api_key)
-                    
                     pil_img = None
                     if v_img:
                         pil_img = Image.open(v_img).convert("RGB")
                     
-                    # Generate
-                    operation = client.models.generate_videos(
-                        model=VIDEO_MODEL,
-                        prompt=v_prompt,
-                        image=pil_img,
-                        config={"duration_seconds": 5} 
-                    )
+                    # Generate via Helper
+                    client, operation = start_veo_job(v_prompt, pil_img)
                     
                     # Poll
                     while not operation.done:

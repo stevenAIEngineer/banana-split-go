@@ -1,4 +1,4 @@
-# Banana Split Studio v1.3
+# Banana Split Studio v1.4
 # Developed by: Steven Lansangan
 
 import warnings

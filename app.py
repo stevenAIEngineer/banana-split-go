@@ -120,6 +120,19 @@ def start_veo_job(prompt, image_input=None):
     cfg = {"duration_seconds": 5}
     errors = []
 
+    # Pre-process Image for Veo (Fixes 400 Error)
+    if image_input and isinstance(image_input, Image.Image):
+        try:
+            b = io.BytesIO()
+            image_input.save(b, format="PNG")
+            # Explicitly create types.Image with mime_type to satisfy strict API check
+            image_input = genai_client_lib.types.Image(
+                image_bytes=b.getvalue(),
+                mime_type='image/png'
+            )
+        except Exception as e:
+            errors.append(f"ImagePrep: {e}")
+
     # 1. Try Standard API Key
     try:
         c = genai_client_lib.Client(api_key=api_key)

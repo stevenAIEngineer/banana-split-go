@@ -406,22 +406,28 @@ with tab_story:
                     except Exception as e:
                         return idx, None, str(e)
 
-                with st.spinner("Generating Videos... (This takes time per shot)"):
-                    with ThreadPoolExecutor(max_workers=2) as exe:
-                        futures = [exe.submit(generate_single_video, i, s) for i, s in enumerate(st.session_state['shots'])]
-                        for f in futures:
-                            i, vid_uri, err = f.result()
-                            if vid_uri:
-                                if i not in st.session_state['generated_videos']:
-                                    st.session_state['generated_videos'][i] = {}
-                                st.session_state['generated_videos'][i] = vid_uri
-                            elif err:
-                                st.error(f"Shot {i+1}: {err}")
+                with st.spinner("Generating Videos... (Processing valid renders only)"):
+                    valid_indices = [i for i, _ in enumerate(st.session_state['shots']) 
+                                     if 'final' in st.session_state['generated_images'].get(i, {})]
                     
-                    save_project()
-                    st.toast("✅ Batch Videos Complete!", icon="🎥")
-                    time.sleep(1)
-                    st.rerun()
+                    if not valid_indices:
+                        st.warning("No Final Renders found to animate.")
+                    else:
+                        with ThreadPoolExecutor(max_workers=2) as exe:
+                            futures = [exe.submit(generate_single_video, i, st.session_state['shots'][i]) for i in valid_indices]
+                            for f in futures:
+                                i, vid_uri, err = f.result()
+                                if vid_uri:
+                                    if i not in st.session_state['generated_videos']:
+                                        st.session_state['generated_videos'][i] = {}
+                                    st.session_state['generated_videos'][i] = vid_uri
+                                elif err:
+                                    st.error(f"Shot {i+1}: {err}")
+                        
+                        save_project()
+                        st.toast("✅ Batch Videos Complete!", icon="🎥")
+                        time.sleep(1)
+                        st.rerun()
 
         st.divider()
 

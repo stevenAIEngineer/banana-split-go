@@ -1,5 +1,5 @@
 # Developed by: Steven Lansangan
-# Developed by: Steven Lansangan
+
 import google.generativeai as genai
 import os
 from dotenv import load_dotenv

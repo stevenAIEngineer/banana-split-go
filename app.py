@@ -393,7 +393,7 @@ with tab_story:
                     style = st.session_state.get('sketch_style_dna', "Blue pencil sketch.")
                     roster = st.session_state.get('roster', {})
                     
-                    with ThreadPoolExecutor(max_workers=1) as exe:
+                    with ThreadPoolExecutor(max_workers=4) as exe:
                         futures = [exe.submit(sketch_task, i, s, mode, style, roster) for i, s in enumerate(st.session_state['shots'])]
                         for f in futures:
                             i, img, err = f.result()
@@ -401,7 +401,6 @@ with tab_story:
                                 if i not in st.session_state['generated_images']: 
                                     st.session_state['generated_images'][i] = {}
                                 st.session_state['generated_images'][i]['draft'] = img
-                            time.sleep(2) # Throttle for Free Tier
                     
                     save_project()
                     st.toast("✅ Batch Sketches Complete!", icon="✏️")
@@ -443,7 +442,7 @@ with tab_story:
                     roster = st.session_state.get('roster', {})
                     current = st.session_state['generated_images']
                     
-                    with ThreadPoolExecutor(max_workers=1) as exe:
+                    with ThreadPoolExecutor(max_workers=4) as exe:
                         futures = [exe.submit(render_task, i, s, mode, style, roster, current) for i, s in enumerate(st.session_state['shots'])]
                         for f in futures:
                             i, img, err = f.result()
@@ -451,7 +450,6 @@ with tab_story:
                                 if i not in st.session_state['generated_images']: 
                                     st.session_state['generated_images'][i] = {}
                                 st.session_state['generated_images'][i]['final'] = img
-                            time.sleep(2) # Throttle for Free Tier
                     
                     save_project()
                     st.toast("✅ Batch Renders Complete!", icon="🎨")

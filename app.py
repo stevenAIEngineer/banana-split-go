@@ -116,8 +116,8 @@ def start_veo_job(prompt, image_input=None):
     Attempts to start a Veo job using multiple auth methods.
     Returns: (client, operation)
     """
-    # Config (No FPS, as it is unsupported)
-    cfg = {"duration_seconds": 5}
+    # Config: Remove explicit duration to fix 'out of bound' error. Default is 5s.
+    cfg = None 
     errors = []
 
     # Pre-process Image for Veo (Fixes 400 Error)

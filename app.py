@@ -116,6 +116,35 @@ with st.sidebar.expander("⚙️ Manage Data"):
         save_project()
         st.rerun()
 
+    st.markdown("---")
+    st.caption("📦 Backup & Restore")
+    
+    # Backup
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE, "rb") as f:
+            st.download_button(
+                label="💾 Download Project Backup", 
+                data=f,
+                file_name="banana_split_backup.pkl",
+                mime="application/octet-stream",
+                help="Download your entire project state to save it locally."
+            )
+    
+    # Restore
+    uploaded_state = st.file_uploader("Restore Project", type=["pkl"], label_visibility="collapsed")
+    if uploaded_state:
+        if st.button("⚠️ Restore from Backup"):
+            try:
+                # Save uploaded file to disk
+                with open(STATE_FILE, "wb") as f:
+                    f.write(uploaded_state.getbuffer())
+                
+                # Reload
+                st.session_state["initialized"] = False
+                st.rerun()
+            except Exception as e:
+                st.error(f"Restore failed: {e}")
+
 st.sidebar.markdown("---")
 st.sidebar.subheader("Cast Roster")
 

@@ -458,7 +458,8 @@ with tab_story:
                             
                         if operation.result and operation.result.generated_videos:
                             return idx, operation.result.generated_videos[0].video.uri, None
-                        return idx, None, "No video returned."
+                        
+                        return idx, None, f"No video response. Raw: {operation.result}"
 
                     except Exception as e:
                         return idx, None, str(e)
@@ -665,7 +666,7 @@ with tab_story:
                                     save_project()
                                     st.rerun()
                                 else:
-                                    st.error("No video returned.")
+                                    st.error(f"No video returned. Debug: {operation.result}")
                             except Exception as e:
                                 st.error(str(e))
 
@@ -789,7 +790,7 @@ with tab_video:
                         st.session_state['free_video'] = uri
                         save_project()
                     else:
-                        st.error("No video returned.")
+                        st.error(f"No video returned. Debug: {operation.result}")
                         
                 except Exception as e:
                     st.error(f"Error: {e}")

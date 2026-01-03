@@ -98,6 +98,18 @@ def get_state_bytes():
 
 st.set_page_config(page_title="Banana Split Studio", layout="wide", page_icon="🍌")
 load_dotenv()
+api_key = os.getenv("GOOGLE_API_KEY")
+video_api_key = os.getenv("GOOGLE_API_KEY_VIDEO")
+
+if not api_key:
+    st.error("Missing GOOGLE_API_KEY in .env")
+    st.stop()
+
+if not video_api_key:
+    st.warning("Missing GOOGLE_API_KEY_VIDEO in .env unless you are not using video features.")
+    video_api_key = api_key # Fallback
+
+genai.configure(api_key=api_key)
 
 # Initialize Session State
 defaults = {
@@ -386,7 +398,7 @@ with tab_story:
                             return idx, None, "No final render found."
 
                         prompt_text = f"Cinematic movement. {shot.get('action', '')}"
-                        client = genai_client_lib.Client(api_key=api_key)
+                        client = genai_client_lib.Client(api_key=video_api_key)
                         
                         operation = client.models.generate_videos(
                             model=VIDEO_MODEL,
@@ -594,7 +606,7 @@ with tab_story:
                         with st.spinner("Generating Video..."):
                             try:
                                 prompt_text = f"Cinematic movement. {shot.get('action', '')}"
-                                client = genai_client_lib.Client(api_key=api_key)
+                                client = genai_client_lib.Client(api_key=video_api_key)
                                 
                                 operation = client.models.generate_videos(
                                     model=VIDEO_MODEL,
@@ -722,7 +734,7 @@ with tab_video:
         if st.button("Generate Video", type="primary", key="gen_free_vid"):
             with st.spinner("Generating Video... (Approx. 1-2 mins)"):
                 try:
-                    client = genai_client_lib.Client(api_key=api_key)
+                    client = genai_client_lib.Client(api_key=video_api_key)
                     
                     pil_img = None
                     if v_img:

@@ -232,7 +232,7 @@ with tab_story:
                     except Exception as e:
                         return idx, None, str(e)
 
-                with st.status("Sketching...", expanded=True) as status:
+                with st.spinner("Generating Sketches..."):
                     style = st.session_state.get('sketch_style_dna', "Blue pencil sketch.")
                     roster = st.session_state.get('roster', {})
                     
@@ -244,10 +244,8 @@ with tab_story:
                                 if i not in st.session_state['generated_images']: 
                                     st.session_state['generated_images'][i] = {}
                                 st.session_state['generated_images'][i]['draft'] = img
-                                st.write(f"✅ Shot {i+1}")
                     
                     save_project()
-                    status.update(label="Done!", state="complete", expanded=False)
                     st.rerun()
 
             # Generate Renders
@@ -281,7 +279,7 @@ with tab_story:
                     except Exception as e:
                         return idx, None, str(e)
                 
-                with st.status("Rendering...", expanded=True) as status:
+                with st.spinner("Rendering Finals..."):
                     style = st.session_state.get('final_style_dna', "3D High Fidelity.")
                     roster = st.session_state.get('roster', {})
                     current = st.session_state['generated_images']
@@ -294,10 +292,8 @@ with tab_story:
                                 if i not in st.session_state['generated_images']: 
                                     st.session_state['generated_images'][i] = {}
                                 st.session_state['generated_images'][i]['final'] = img
-                                st.write(f"✅ Shot {i+1}")
                     
                     save_project()
-                    status.update(label="Done!", state="complete", expanded=False)
                     st.rerun()
 
         st.divider()

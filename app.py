@@ -337,19 +337,39 @@ with tab_story:
         
         if st.button("Process Script"):
             if script_text:
-                with st.spinner("Breaking down script into shots..."):
+                with st.spinner("Analyzing Script & Engineering Prompts..."):
                     try:
+                        # Use Gemini 2.0 Flash (or best available analysis model)
                         model = genai.GenerativeModel(ANALYSIS_MODEL, generation_config={"response_mime_type": "application/json"})
-                        sys_p = """Convert to JSON list of shots (id, action, dialogue).
-                        CRITICAL SAFETY RULE: You must anonymize ALL references to real celebrities, politicians, or public figures in the 'action' descriptions.
-                        Replace them with generic descriptions (e.g. 'President Trump' -> 'A boisterous man in a suit', 'Elon Musk' -> 'A tech billionaire').
-                        This is required for downstream video generation. Do not fail, just rewrite nicely."""
+                        
+                        sys_p = """You are an expert Director of Photography and AI Prompt Engineer.
+                        Task: Convert the script into a JSON list of visual shots with fields: 'id', 'action', 'dialogue', 'visual_prompt'.
+                        
+                        Guidelines for 'visual_prompt':
+                        1. Create a detailed, text-free visual description optimized for AI image generation (Midjourney/Flux style).
+                        2. AVOID: Text overlays, speech bubbles, UI elements, or mention of "script".
+                        3. INCLUDE: Subject details, lighting (e.g. cinematic, dim, neon), camera angle (e.g. wide shot, close up), and texture (e.g. 8k, highly detailed).
+                        4. CRITICAL SAFETY: Anonymize ALL specific celebrities or real people. Replace with generic physical descriptions (e.g. "A tall man in a suit").
+                        
+                        Example Output:
+                        {
+                            "id": 1,
+                            "action": "John walks into the bar.",
+                            "dialogue": "I need a drink.",
+                            "visual_prompt": "Cinematic medium shot, a weary man in a trench coat entering a dark moody jazz bar, smoky atmosphere, warm backlighting, 8k resolution."
+                        }"""
+                        
                         res = model.generate_content(f"{sys_p}\nSCRIPT:\n{script_text}")
                         st.session_state['shots'] = json.loads(res.text)
+                        
+                        # Fallback if visual_prompt missing
+                        for s in st.session_state['shots']:
+                            if 'visual_prompt' not in s: s['visual_prompt'] = s.get('action', '')
+                            
                         save_project()
                         st.rerun()
                     except Exception as e:
-                        st.error(e)
+                        st.error(f"Analysis Failed: {e}")
 
     # Shot Generation Controls
     if st.session_state['shots']:
@@ -367,14 +387,15 @@ with tab_story:
             if c2.button("1. Generate Sketches", type="primary", use_container_width=True):
                 def sketch_task(idx, shot, mode, style, roster):
                     try:
-                        inputs = [f"TASK: SKETCH. STYLE: {style}."]
-                        scene = f"SCENE: {shot.get('action', '')}. {shot.get('dialogue', '')}"
+                        # Use optimized visual prompt if available
+                        base_prompt = shot.get('visual_prompt', shot.get('action', ''))
+                        inputs = [f"TASK: SKETCH. STYLE: {style}. SCENE: {base_prompt}."]
                         
                         if mode == "Consistent" and roster:
                             for n, d in roster.items():
                                 inputs.extend([d['image'], f"ID: {n} (Ref)."])
                         
-                        inputs.append(f"{scene} \nCONSTRAINT: No shading. Lines only.")
+                        inputs.append("CONSTRAINT: No shading. Lines only. No text.")
                         
                         m = genai.GenerativeModel(DRAFT_MODEL, safety_settings=SAFETY_SETTINGS)
                         res = m.generate_content(inputs)
@@ -411,8 +432,9 @@ with tab_story:
             if c3.button("2. Generate Renders", type="primary", use_container_width=True, disabled=not has_sketches):
                 def render_task(idx, shot, mode, style, roster, current):
                     try:
+                        # Use optimized visual prompt if available
+                        base_prompt = shot.get('visual_prompt', shot.get('action', ''))
                         inputs = [f"TASK: RENDER. STYLE: {style}."]
-                        scene = f"SCENE: {shot.get('action', '')}."
                         
                         if idx in current and 'draft' in current[idx]:
                             inputs.extend([current[idx]['draft'], "INSTRUCTION: Image-to-Image render. Keep layout."])
@@ -422,7 +444,7 @@ with tab_story:
                             for n, d in roster.items():
                                 inputs.extend([d['image'], f"ID: {n}."])
 
-                        inputs.append(scene)
+                        inputs.append(f"SCENE: {base_prompt}.")
                         
                         m = genai.GenerativeModel(FINAL_MODEL, safety_settings=SAFETY_SETTINGS)
                         res = m.generate_content(inputs)
@@ -463,7 +485,9 @@ with tab_story:
                         if not final_img:
                             return idx, None, "No final render passed."
 
-                        prompt_text = f"Cinematic movement. {shot.get('action', '')}"
+                        # Use optimized visual prompt if available
+                        base_prompt = shot.get('visual_prompt', shot.get('action', ''))
+                        prompt_text = f"Cinematic movement. {base_prompt}"
                         
                         client, operation = start_veo_job(prompt_text, final_img)
                         

@@ -379,29 +379,44 @@ with tab_story:
         
     # Shot Generation Controls
     if st.session_state['shots']:
-        st.subheader(f"Shots ({len(st.session_state['shots'])})")
-        
         with st.container():
-            c1, c2, c3, c4 = st.columns([0.5, 1, 1, 1])
-            # C1 is spacer/info
+            st.markdown("### 🏭 Production Line")
             
             # State Checks for Gating
             has_sketches = any('draft' in st.session_state['generated_images'].get(i, {}) for i, _ in enumerate(st.session_state['shots']))
             has_finals = any('final' in st.session_state['generated_images'].get(i, {}) for i, _ in enumerate(st.session_state['shots']))
+            
+            # --- ROW 1: Settings ---
+            c_cfg1, c_cfg2, c_cfg3 = st.columns(3)
+            with c_cfg1:
+                st.markdown("**1. Draft Settings**")
+                inj_sketch = st.checkbox("Inject Cast", value=False, key="batch_inj_s")
+            with c_cfg2:
+                st.markdown("**2. Render Settings**")
+                inj_final = st.checkbox("Inject Cast", value=True, key="batch_inj_r")
+            with c_cfg3:
+                st.markdown("**3. Video Settings**")
+                st.caption("Auto-animate Finals")
 
-            # 1. Generate Sketches
-            with c2:
-                inj_sketch = st.checkbox("Inject Cast into Sketches", value=False)
-                if st.button("1. Generate Sketches", type="primary", use_container_width=True):
+            # --- ROW 2: Actions ---
+            col_draft, col_render, col_video = st.columns(3)
+
+            # --- 1. Generate Sketches ---
+            with col_draft:
+                if st.button("✏️ Generate Sketches", type="primary", use_container_width=True):
                     def sketch_task(idx, shot, use_roster, style, roster):
                         try:
                             # Use optimized visual prompt if available
                             base_prompt = shot.get('visual_prompt', shot.get('action', ''))
                             inputs = [f"TASK: SKETCH. STYLE: {style}. SCENE: {base_prompt}."]
                             
-                            if use_roster and roster:
-                                for n, d in roster.items():
-                                    inputs.extend([d['image'], f"ID: {n} (Ref)."])
+                            # Filter Roster based on Per-Shot Selection
+                            active_cast = shot.get('active_cast', list(roster.keys()))
+                            
+                            if use_roster and roster and active_cast:
+                                for n in active_cast:
+                                    if n in roster:
+                                        inputs.extend([roster[n]['image'], f"ID: {n} (Ref)."])
                             
                             inputs.append("CONSTRAINT: No shading. Lines only. No text.")
                             
@@ -437,9 +452,8 @@ with tab_story:
                         st.rerun()
 
             # 2. Generate Renders (Disabled if no sketches)
-            with c3:
-                inj_final = st.checkbox("Inject Cast (Final)", value=True)
-                if st.button("2. Generate Renders", type="primary", use_container_width=True, disabled=not has_sketches):
+            with col_render:
+                if st.button("🎨 Generate Finals", type="primary", use_container_width=True, disabled=not has_sketches):
                     def render_task(idx, shot, use_roster, style, roster, current):
                         try:
                             # Use optimized visual prompt if available
@@ -449,10 +463,14 @@ with tab_story:
                             if idx in current and 'draft' in current[idx]:
                                 inputs.extend([current[idx]['draft'], "INSTRUCTION: Image-to-Image render. Keep layout structure from sketch."])
 
-                            if use_roster and roster:
+                            # Filter Roster based on Per-Shot Selection
+                            active_cast = shot.get('active_cast', list(roster.keys()))
+
+                            if use_roster and roster and active_cast:
                                 inputs.append("CHARACTERS:")
-                                for n, d in roster.items():
-                                    inputs.extend([d['image'], f"ID: {n}."])
+                                for n in active_cast:
+                                    if n in roster:
+                                        inputs.extend([roster[n]['image'], f"ID: {n}."])
 
                             inputs.append(f"SCENE: {base_prompt}.")
                             
@@ -488,60 +506,61 @@ with tab_story:
                     time.sleep(1)
                     st.rerun()
 
-            # 3. Generate Videos (Disabled if no renders)
-            if c4.button("3. Generate Videos", type="primary", use_container_width=True, disabled=not has_finals):
-                def generate_single_video(idx, shot, final_img):
-                    try:
-                        if not final_img:
-                            return idx, None, "No final render passed."
+            # --- 3. Generate Videos ---
+            with col_video:
+                if st.button("🎥 Generate Videos", type="primary", use_container_width=True, disabled=not has_finals):
+                    def generate_single_video(idx, shot, final_img):
+                        try:
+                            if not final_img:
+                                return idx, None, "No final render passed."
 
-                        # Use optimized visual prompt if available
-                        base_prompt = shot.get('visual_prompt', shot.get('action', ''))
-                        prompt_text = f"Cinematic movement. {base_prompt}"
-                        
-                        client, operation = start_veo_job(prompt_text, final_img)
-                        
-                        while not operation.done:
-                            time.sleep(10)
-                            operation = client.operations.get(operation)
+                            # Use optimized visual prompt if available
+                            base_prompt = shot.get('visual_prompt', shot.get('action', ''))
+                            prompt_text = f"Cinematic movement. {base_prompt}"
                             
-                        if operation.result and operation.result.generated_videos:
-                            return idx, download_video(operation.result.generated_videos[0].video.uri), None
+                            client, operation = start_veo_job(prompt_text, final_img)
+                            
+                            while not operation.done:
+                                time.sleep(10)
+                                operation = client.operations.get(operation)
+                                
+                            if operation.result and operation.result.generated_videos:
+                                return idx, download_video(operation.result.generated_videos[0].video.uri), None
+                            
+                            if getattr(operation.result, 'rai_media_filtered_reasons', None):
+                                return idx, None, f"Blocked: {operation.result.rai_media_filtered_reasons[0]}"
+
+                            return idx, None, f"No video. Res: {operation.result} Err: {getattr(operation, 'error', 'None')}"
+
+                        except Exception as e:
+                            return idx, None, str(e)
+
+                    with st.spinner("Generating Videos... (Processing valid renders only)"):
+                        # Pre-calculate inputs in main thread to avoid thread-safety issues
+                        tasks = []
+                        for i, _ in enumerate(st.session_state['shots']):
+                             data = st.session_state['generated_images'].get(i, {})
+                             if 'final' in data:
+                                 tasks.append((i, st.session_state['shots'][i], data['final']))
                         
-                        if getattr(operation.result, 'rai_media_filtered_reasons', None):
-                            return idx, None, f"Blocked: {operation.result.rai_media_filtered_reasons[0]}"
-
-                        return idx, None, f"No video. Res: {operation.result} Err: {getattr(operation, 'error', 'None')}"
-
-                    except Exception as e:
-                        return idx, None, str(e)
-
-                with st.spinner("Generating Videos... (Processing valid renders only)"):
-                    # Pre-calculate inputs in main thread to avoid thread-safety issues
-                    tasks = []
-                    for i, _ in enumerate(st.session_state['shots']):
-                         data = st.session_state['generated_images'].get(i, {})
-                         if 'final' in data:
-                             tasks.append((i, st.session_state['shots'][i], data['final']))
-                    
-                    if not tasks:
-                        st.warning("No Final Renders found to animate.")
-                    else:
-                        with ThreadPoolExecutor(max_workers=2) as exe:
-                            futures = [exe.submit(generate_single_video, i, s, img) for i, s, img in tasks]
-                            for f in futures:
-                                i, vid_uri, err = f.result()
-                                if vid_uri:
-                                    if i not in st.session_state['generated_videos']:
-                                        st.session_state['generated_videos'][i] = {}
-                                    st.session_state['generated_videos'][i] = vid_uri
-                                elif err:
-                                    st.error(f"Shot {i+1}: {err}")
-                        
-                        save_project()
-                        st.toast("✅ Batch Videos Complete!", icon="🎥")
-                        time.sleep(1)
-                        st.rerun()
+                        if not tasks:
+                            st.warning("No Final Renders found to animate.")
+                        else:
+                            with ThreadPoolExecutor(max_workers=2) as exe:
+                                futures = [exe.submit(generate_single_video, i, s, img) for i, s, img in tasks]
+                                for f in futures:
+                                    i, vid_uri, err = f.result()
+                                    if vid_uri:
+                                        if i not in st.session_state['generated_videos']:
+                                            st.session_state['generated_videos'][i] = {}
+                                        st.session_state['generated_videos'][i] = vid_uri
+                                    elif err:
+                                        st.error(f"Shot {i+1}: {err}")
+                            
+                            save_project()
+                            st.toast("✅ Batch Videos Complete!", icon="🎥")
+                            time.sleep(1)
+                            st.rerun()
 
         st.divider()
 
@@ -628,9 +647,20 @@ with tab_story:
                     
                 action_val = st.text_area("Action", value=shot.get('action'), key=f"action_{i}", height=100, on_change=update_action)
                 
-                # Cast
-                active_cast = list(st.session_state['roster'].keys())
-                selected = st.multiselect("Cast", active_cast, default=active_cast, key=f"cast_{i}")
+                # Cast Selection (Per Shot)
+                all_cast = list(st.session_state['roster'].keys())
+                
+                def update_cast():
+                    st.session_state['shots'][i]['active_cast'] = st.session_state[f"cast_{i}"]
+                    save_project()
+
+                # Default to ALL if not set, or load existing
+                items_to_select = shot.get('active_cast', all_cast)
+                # Filter out any deleted characters to prevent errors
+                valid_defaults = [x for x in items_to_select if x in all_cast]
+                
+                st.multiselect("Active Cast", all_cast, default=valid_defaults, key=f"cast_{i}", on_change=update_cast)
+                # Note: 'selected' var removed as we save directly to state via callback
 
             with c2:
                 # Draft Button
@@ -640,9 +670,13 @@ with tab_story:
                             style = st.session_state.get('sketch_style_dna', "Blue pencil sketch.")
                             inputs = [f"TASK: SKETCH. STYLE: {style}."]
                             
-                            if selected:
-                                for n in selected:
-                                    inputs.extend([st.session_state['roster'][n]['image'], f"ID: {n} (Ref)."])
+                            # Use Per-Shot Active Cast
+                            loop_cast = shot.get('active_cast', list(st.session_state['roster'].keys()))
+                            
+                            if loop_cast:
+                                for n in loop_cast:
+                                    if n in st.session_state['roster']:
+                                        inputs.extend([st.session_state['roster'][n]['image'], f"ID: {n} (Ref)."])
                             
                             inputs.append(f"SCENE: {action_val}. \nCONSTRAINT: Lines only.")
                             
@@ -674,10 +708,14 @@ with tab_story:
                             if isinstance(curr, dict) and 'draft' in curr:
                                 inputs.extend([curr['draft'], "INSTRUCTION: Keep layout."])
                             
-                            if selected:
+                            # Per-Shot Cast
+                            loop_cast = shot.get('active_cast', list(st.session_state['roster'].keys()))
+                            
+                            if loop_cast:
                                 inputs.append("CHARACTERS:")
-                                for n in selected:
-                                    inputs.extend([st.session_state['roster'][n]['image'], f"ID: {n}."])
+                                for n in loop_cast:
+                                    if n in st.session_state['roster']:
+                                        inputs.extend([st.session_state['roster'][n]['image'], f"ID: {n}."])
                             
                             inputs.append(f"SCENE: {action_val}.")
                             

@@ -458,14 +458,10 @@ with tab_story:
 
             # 3. Generate Videos (Disabled if no renders)
             if c4.button("3. Generate Videos", type="primary", use_container_width=True, disabled=not has_finals):
-                def generate_single_video(idx, shot):
+                def generate_single_video(idx, shot, final_img):
                     try:
-                        # 1. Get Image
-                        img_data = st.session_state.get('generated_images', {}).get(idx, {})
-                        final_img = img_data.get('final')
-                        
                         if not final_img:
-                            return idx, None, "No final render found."
+                            return idx, None, "No final render passed."
 
                         prompt_text = f"Cinematic movement. {shot.get('action', '')}"
                         
@@ -487,14 +483,18 @@ with tab_story:
                         return idx, None, str(e)
 
                 with st.spinner("Generating Videos... (Processing valid renders only)"):
-                    valid_indices = [i for i, _ in enumerate(st.session_state['shots']) 
-                                     if 'final' in st.session_state['generated_images'].get(i, {})]
+                    # Pre-calculate inputs in main thread to avoid thread-safety issues
+                    tasks = []
+                    for i, _ in enumerate(st.session_state['shots']):
+                         data = st.session_state['generated_images'].get(i, {})
+                         if 'final' in data:
+                             tasks.append((i, st.session_state['shots'][i], data['final']))
                     
-                    if not valid_indices:
+                    if not tasks:
                         st.warning("No Final Renders found to animate.")
                     else:
                         with ThreadPoolExecutor(max_workers=2) as exe:
-                            futures = [exe.submit(generate_single_video, i, st.session_state['shots'][i]) for i in valid_indices]
+                            futures = [exe.submit(generate_single_video, i, s, img) for i, s, img in tasks]
                             for f in futures:
                                 i, vid_uri, err = f.result()
                                 if vid_uri:

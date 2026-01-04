@@ -22,7 +22,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 # Constants
 SESSIONS_DIR = "sessions"
-ANALYSIS_MODEL = "gemini-2.0-flash-exp" 
+ANALYSIS_MODEL = "gemini-3-flash-preview" 
 DRAFT_MODEL = "gemini-3-pro-image-preview"
 FINAL_MODEL = "gemini-3-pro-image-preview"
 VIDEO_MODEL = "veo-3.1-generate-preview"
@@ -306,7 +306,8 @@ with tab1:
         if st.button("Analyze Sketch Style"):
             with st.spinner("Analyzing Sketch Style..."):
                 m = genai.GenerativeModel(ANALYSIS_MODEL)
-                st.session_state['sketch_style_dna'] = m.generate_content(["Describe art style.", s_img]).text
+                p = "Analyze ONLY the artistic technique (e.g. pencil rough, charcoal, line weight) used in this image. Do NOT describe the subject matter or objects. Return a concise style descriptor."
+                st.session_state['sketch_style_dna'] = m.generate_content([p, s_img]).text
                 save_project()
                 st.success("Style Locked!")
 
@@ -318,7 +319,8 @@ with tab2:
         if st.button("Analyze Render Style"):
             with st.spinner("Analyzing Render Style..."):
                 m = genai.GenerativeModel(ANALYSIS_MODEL)
-                st.session_state['final_style_dna'] = m.generate_content(["Describe art style.", f_img]).text
+                p = "Analyze ONLY the visual style (lighting, color palette, medium, texture, rendering fidelity). Do NOT describe the subject matter or objects. Return a concise style descriptor."
+                st.session_state['final_style_dna'] = m.generate_content([p, f_img]).text
                 save_project()
                 st.success("Style Locked!")
 
@@ -375,103 +377,111 @@ with tab_story:
     if st.session_state['shots']:
         st.subheader(f"Shots ({len(st.session_state['shots'])})")
         
+    # Shot Generation Controls
+    if st.session_state['shots']:
+        st.subheader(f"Shots ({len(st.session_state['shots'])})")
+        
         with st.container():
-            c1, c2, c3, c4 = st.columns([1, 1, 1, 1])
-            mode = c1.radio("Mode", ["Fast", "Consistent"], index=1, horizontal=True)
+            c1, c2, c3, c4 = st.columns([0.5, 1, 1, 1])
+            # C1 is spacer/info
             
             # State Checks for Gating
             has_sketches = any('draft' in st.session_state['generated_images'].get(i, {}) for i, _ in enumerate(st.session_state['shots']))
             has_finals = any('final' in st.session_state['generated_images'].get(i, {}) for i, _ in enumerate(st.session_state['shots']))
 
             # 1. Generate Sketches
-            if c2.button("1. Generate Sketches", type="primary", use_container_width=True):
-                def sketch_task(idx, shot, mode, style, roster):
-                    try:
-                        # Use optimized visual prompt if available
-                        base_prompt = shot.get('visual_prompt', shot.get('action', ''))
-                        inputs = [f"TASK: SKETCH. STYLE: {style}. SCENE: {base_prompt}."]
-                        
-                        if mode == "Consistent" and roster:
-                            for n, d in roster.items():
-                                inputs.extend([d['image'], f"ID: {n} (Ref)."])
-                        
-                        inputs.append("CONSTRAINT: No shading. Lines only. No text.")
-                        
-                        m = genai.GenerativeModel(DRAFT_MODEL, safety_settings=SAFETY_SETTINGS)
-                        res = m.generate_content(inputs)
-                        
-                        img = None
-                        if res.parts:
-                            for p in res.parts:
-                                if p.inline_data:
-                                    img = Image.open(io.BytesIO(p.inline_data.data))
-                                    break
-                        return idx, img, None
-                    except Exception as e:
-                        return idx, None, str(e)
+            with c2:
+                inj_sketch = st.checkbox("Inject Cast into Sketches", value=False)
+                if st.button("1. Generate Sketches", type="primary", use_container_width=True):
+                    def sketch_task(idx, shot, use_roster, style, roster):
+                        try:
+                            # Use optimized visual prompt if available
+                            base_prompt = shot.get('visual_prompt', shot.get('action', ''))
+                            inputs = [f"TASK: SKETCH. STYLE: {style}. SCENE: {base_prompt}."]
+                            
+                            if use_roster and roster:
+                                for n, d in roster.items():
+                                    inputs.extend([d['image'], f"ID: {n} (Ref)."])
+                            
+                            inputs.append("CONSTRAINT: No shading. Lines only. No text.")
+                            
+                            m = genai.GenerativeModel(DRAFT_MODEL, safety_settings=SAFETY_SETTINGS)
+                            res = m.generate_content(inputs)
+                            
+                            img = None
+                            if res.parts:
+                                for p in res.parts:
+                                    if p.inline_data:
+                                        img = Image.open(io.BytesIO(p.inline_data.data))
+                                        break
+                            return idx, img, None
+                        except Exception as e:
+                            return idx, None, str(e)
 
-                with st.spinner("Generating Sketches..."):
-                    style = st.session_state.get('sketch_style_dna', "Blue pencil sketch.")
-                    roster = st.session_state.get('roster', {})
-                    
-                    with ThreadPoolExecutor(max_workers=4) as exe:
-                        futures = [exe.submit(sketch_task, i, s, mode, style, roster) for i, s in enumerate(st.session_state['shots'])]
-                        for f in futures:
-                            i, img, err = f.result()
-                            if img:
-                                if i not in st.session_state['generated_images']: 
-                                    st.session_state['generated_images'][i] = {}
-                                st.session_state['generated_images'][i]['draft'] = img
-                    
-                    save_project()
-                    st.toast("✅ Batch Sketches Complete!", icon="✏️")
-                    time.sleep(1)
-                    st.rerun()
+                    with st.spinner("Generating Sketches..."):
+                        style = st.session_state.get('sketch_style_dna', "Blue pencil sketch.")
+                        roster = st.session_state.get('roster', {})
+                        
+                        with ThreadPoolExecutor(max_workers=4) as exe:
+                            futures = [exe.submit(sketch_task, i, s, inj_sketch, style, roster) for i, s in enumerate(st.session_state['shots'])]
+                            for f in futures:
+                                i, img, err = f.result()
+                                if img:
+                                    if i not in st.session_state['generated_images']: 
+                                        st.session_state['generated_images'][i] = {}
+                                    st.session_state['generated_images'][i]['draft'] = img
+                        
+                        save_project()
+                        st.toast("✅ Batch Sketches Complete!", icon="✏️")
+                        time.sleep(1)
+                        st.rerun()
 
             # 2. Generate Renders (Disabled if no sketches)
-            if c3.button("2. Generate Renders", type="primary", use_container_width=True, disabled=not has_sketches):
-                def render_task(idx, shot, mode, style, roster, current):
-                    try:
-                        # Use optimized visual prompt if available
-                        base_prompt = shot.get('visual_prompt', shot.get('action', ''))
-                        inputs = [f"TASK: RENDER. STYLE: {style}."]
-                        
-                        if idx in current and 'draft' in current[idx]:
-                            inputs.extend([current[idx]['draft'], "INSTRUCTION: Image-to-Image render. Keep layout."])
+            with c3:
+                inj_final = st.checkbox("Inject Cast (Final)", value=True)
+                if st.button("2. Generate Renders", type="primary", use_container_width=True, disabled=not has_sketches):
+                    def render_task(idx, shot, use_roster, style, roster, current):
+                        try:
+                            # Use optimized visual prompt if available
+                            base_prompt = shot.get('visual_prompt', shot.get('action', ''))
+                            inputs = [f"TASK: RENDER. STYLE: {style}. DO NOT COPY STYLE REFERENCE OBJECTS."]
+                            
+                            if idx in current and 'draft' in current[idx]:
+                                inputs.extend([current[idx]['draft'], "INSTRUCTION: Image-to-Image render. Keep layout structure from sketch."])
 
-                        if mode == "Consistent" and roster:
-                            inputs.append("CHARACTERS:")
-                            for n, d in roster.items():
-                                inputs.extend([d['image'], f"ID: {n}."])
+                            if use_roster and roster:
+                                inputs.append("CHARACTERS:")
+                                for n, d in roster.items():
+                                    inputs.extend([d['image'], f"ID: {n}."])
 
-                        inputs.append(f"SCENE: {base_prompt}.")
-                        
-                        m = genai.GenerativeModel(FINAL_MODEL, safety_settings=SAFETY_SETTINGS)
-                        res = m.generate_content(inputs)
-                        
-                        img = None
-                        if res.parts:
-                            for p in res.parts:
-                                if p.inline_data:
-                                    img = Image.open(io.BytesIO(p.inline_data.data))
-                                    break
-                        return idx, img, None
-                    except Exception as e:
-                        return idx, None, str(e)
-                
-                with st.spinner("Rendering Finals..."):
-                    style = st.session_state.get('final_style_dna', "3D High Fidelity.")
-                    roster = st.session_state.get('roster', {})
-                    current = st.session_state['generated_images']
+                            inputs.append(f"SCENE: {base_prompt}.")
+                            
+                            m = genai.GenerativeModel(FINAL_MODEL, safety_settings=SAFETY_SETTINGS)
+                            res = m.generate_content(inputs)
+                            
+                            img = None
+                            if res.parts:
+                                for p in res.parts:
+                                    if p.inline_data:
+                                        img = Image.open(io.BytesIO(p.inline_data.data))
+                                        break
+                            return idx, img, None
+                        except Exception as e:
+                            return idx, None, str(e)
                     
-                    with ThreadPoolExecutor(max_workers=4) as exe:
-                        futures = [exe.submit(render_task, i, s, mode, style, roster, current) for i, s in enumerate(st.session_state['shots'])]
-                        for f in futures:
-                            i, img, err = f.result()
-                            if img:
-                                if i not in st.session_state['generated_images']: 
-                                    st.session_state['generated_images'][i] = {}
-                                st.session_state['generated_images'][i]['final'] = img
+                    with st.spinner("Rendering Finals..."):
+                        style = st.session_state.get('final_style_dna', "3D High Fidelity.")
+                        roster = st.session_state.get('roster', {})
+                        current = st.session_state['generated_images']
+                        
+                        with ThreadPoolExecutor(max_workers=4) as exe:
+                            futures = [exe.submit(render_task, i, s, inj_final, style, roster, current) for i, s in enumerate(st.session_state['shots'])]
+                            for f in futures:
+                                i, img, err = f.result()
+                                if img:
+                                    if i not in st.session_state['generated_images']: 
+                                        st.session_state['generated_images'][i] = {}
+                                    st.session_state['generated_images'][i]['final'] = img
                     
                     save_project()
                     st.toast("✅ Batch Renders Complete!", icon="🎨")

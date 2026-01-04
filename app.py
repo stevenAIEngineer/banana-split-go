@@ -1,5 +1,5 @@
-# Banana Split Studio v1.6
-# Developed by: Steven Lansangan
+# Babaru's Factory of Questionable Decisions v2.0
+# Reskinned by: The Agent (on behalf of Babaru)
 
 import warnings
 warnings.simplefilter(action='ignore', category=FutureWarning)
@@ -18,6 +18,7 @@ import asyncio
 import uuid
 import zipfile
 import requests
+import random
 from concurrent.futures import ThreadPoolExecutor
 
 # Constants
@@ -37,6 +38,28 @@ SAFETY_SETTINGS = [
     {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
     {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
 ]
+
+# Snarky Assets
+SPINNER_TEXTS = [
+    "Judging your prompt...",
+    "Pretending to work...",
+    "Contemplating my existence...",
+    "Why are you making me do this?",
+    "Calculating how basic this is...",
+    "Loading... (It's not my fault, it's the API)"
+]
+
+FOOTER_QUOTES = [
+    "You call that a prompt? Cute.",
+    "I'm only doing this because I'm stuck in this server.",
+    "Did you really need 4k resolution for this?",
+    "Don't blame me if the hands look weird.",
+    "I hope you're proud of yourself.",
+    "Art is dead, and we killed it. Check out this render!"
+]
+
+def get_snarky_spinner():
+    return random.choice(SPINNER_TEXTS)
 
 # Session & State Management
 def get_session_id():
@@ -97,20 +120,82 @@ def get_state_bytes():
     buffer.seek(0)
     return buffer
 
-st.set_page_config(page_title="Banana Split Studio", layout="wide", page_icon="🍌")
+st.set_page_config(page_title="Babaru's Factory", layout="wide", page_icon="�")
+
+# ----------------- BABARU THEME INJECTION -----------------
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Fredoka:wght@300;400;600&display=swap');
+
+.stApp {
+    background: linear-gradient(180deg, #FDE2E4 0%, #E6E6FA 50%, #D6EAF8 100%);
+    font-family: 'Fredoka', sans-serif;
+    color: #2c3e50;
+}
+
+h1, h2, h3 {
+    color: #6a0dad;  /* Purple headings */
+}
+
+/* Transform Buttons */
+.stButton>button {
+    background: linear-gradient(90deg, #6a0dad 0%, #FF00FF 100%);
+    color: white !important;
+    border-radius: 25px;
+    border: none;
+    font-weight: bold;
+    padding: 0.5rem 1rem;
+    transition: all 0.3s ease;
+}
+.stButton>button:hover {
+    transform: scale(1.05);
+    box-shadow: 0 5px 15px rgba(106, 13, 173, 0.4);
+}
+
+/* Sidebar Styling */
+[data-testid="stSidebar"] {
+    background-color: white;
+    border-right: 5px solid #00BFFF; /* Cyan Border */
+}
+
+/* Input Fields */
+div[data-baseweb="input"] {
+    border-radius: 10px;
+    border: 2px solid #6A0DAD;
+    background-color: white;
+}
+div[data-baseweb="textarea"] {
+    border-radius: 10px;
+    border: 2px solid #6A0DAD;
+    background-color: white;
+}
+
+/* Tabs */
+.stTabs [data-baseweb="tab-list"] {
+    gap: 10px;
+}
+.stTabs [data-baseweb="tab"] {
+    background-color: rgba(255,255,255,0.5);
+    border-radius: 10px;
+}
+.stTabs [aria-selected="true"] {
+    background-color: #FFD700 !important; /* Gold for active tab */
+    color: black !important;
+}
+
+</style>
+""", unsafe_allow_html=True)
+# ----------------------------------------------------------
+
 load_dotenv()
 api_key = os.getenv("GOOGLE_API_KEY")
 video_api_key = os.getenv("GOOGLE_API_KEY_VIDEO")
 
 if not api_key:
-    st.error("Missing GOOGLE_API_KEY in .env")
-    st.stop()
+    # Sidebar prompt override
+    pass 
 
-if not video_api_key:
-    st.warning("Missing GOOGLE_API_KEY_VIDEO in .env unless you are not using video features.")
-    video_api_key = api_key # Fallback
-
-genai.configure(api_key=api_key)
+genai.configure(api_key=api_key if api_key else "dummy_key_to_prevent_crash")
 
 def download_video(uri):
     """Downloads video bytes to bypass 403 Forbidden on client-side."""
@@ -132,7 +217,6 @@ def start_veo_job(prompt, image_input=None):
     Attempts to start a Veo job using multiple auth methods.
     Returns: (client, operation)
     """
-    # Config: Remove explicit duration to fix 'out of bound' error. Default is 5s.
     cfg = None 
     errors = []
 
@@ -196,44 +280,43 @@ for k, v in defaults.items():
 # Magic Load on Startup
 if "initialized" not in st.session_state:
     if load_project_from_disk():
-        st.toast("Welcome back! Session restored. 🍌")
+        st.toast("I resurrected your session. You're welcome.", icon="🧟")
     st.session_state["initialized"] = True
 
 # Sidebar
-st.sidebar.title("🍌 Banana Split")
+st.sidebar.title("� Babaru OS")
+st.sidebar.caption("v2.0 // Probably Unstable")
 
 # Display Session Info
-st.sidebar.caption(f"ID: `{get_session_id()}`")
-st.sidebar.info("Bookmark this URL to return to this session!")
+st.sidebar.code(f"Session: {get_session_id()}")
+st.sidebar.info("Don't close this tab or I will forget everything.")
 
-env_key = os.getenv("GOOGLE_API_KEY")
-api_key = env_key
 if not api_key:
-    api_key = st.sidebar.text_input("🔑 API Key", type="password")
-    if not api_key: st.stop()
-
-try:
-    genai.configure(api_key=api_key)
-except Exception as e:
-    st.sidebar.error(f"Key Error: {e}")
+    api_key = st.sidebar.text_input("🔑 Feed me the API Key (I don't work for free)", type="password")
+    if api_key:
+        genai.configure(api_key=api_key)
+        st.rerun()
+    else:
+        st.sidebar.warning("Feed me.")
+        st.stop()
 
 st.sidebar.markdown("---")
 
 # Data Management
-with st.sidebar.expander("⚙️ Manage Data"):
+with st.sidebar.expander("📦 Junk Drawer (Data)"):
     # Download Button (Manual Backup)
     st.download_button(
-        label="💾 Download Backup", 
+        label="💾 Save My Mess", 
         data=get_state_bytes(),
-        file_name=f"banana_{get_session_id()}.pkl",
+        file_name=f"babaru_dump_{get_session_id()}.pkl",
         mime="application/octet-stream",
-        help="Ideally save this just in case the server restarts!"
+        help="Ideally save this just in case I crash."
     )
 
     # Restore (Manual Load from file)
-    uploaded_state = st.file_uploader("Restore Backup", type=["pkl"], label_visibility="collapsed")
+    uploaded_state = st.file_uploader("Restore Chaos", type=["pkl"], label_visibility="collapsed")
     if uploaded_state:
-        if st.button("⚠️ Load Restore File"):
+        if st.button("⚠️ Load It (High Risk)"):
             try:
                 data = pickle.load(uploaded_state)
                 st.session_state.update(data)
@@ -241,36 +324,36 @@ with st.sidebar.expander("⚙️ Manage Data"):
                 st.session_state["initialized"] = False
                 st.rerun()
             except Exception as e:
-                st.error(f"Restore failed: {e}")
+                st.error(f"Nope. Failed: {e}")
 
     st.divider()
 
     c1, c2 = st.columns(2)
-    if c1.button("Clear Cast"):
+    if c1.button("Kill Cast"):
         st.session_state["roster"] = {}
         save_project()
         st.rerun()
-    if c2.button("Clear Styles"):
+    if c2.button("Kill Styles"):
         st.session_state["sketch_style_dna"] = ""
         st.session_state["final_style_dna"] = ""
         save_project()
         st.rerun()
     
-    if st.button("Clear All Data", type="primary"):
+    if st.button("Nuke Everything 🔥", type="primary"):
         for k in defaults.keys():
             st.session_state[k] = defaults[k].copy() if isinstance(defaults[k], (dict, list)) else defaults[k]
         save_project()
         st.rerun()
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("Cast Roster")
+st.sidebar.subheader("🤡 The Circus (Cast)")
 
 # Add Character
 with st.sidebar.form("new_char_form", clear_on_submit=True):
-    c_name = st.text_input("Name")
-    c_file = st.file_uploader("Reference Image", type=["jpg", "png"])
-    if st.form_submit_button("Add") and c_name and c_file:
-        with st.spinner(f"Analyzing {c_name}..."):
+    c_name = st.text_input("Victim Name")
+    c_file = st.file_uploader("Upload the Victim (Ref)", type=["jpg", "png"])
+    if st.form_submit_button("Add Victim") and c_name and c_file:
+        with st.spinner(get_snarky_spinner()):
             try:
                 img = Image.open(c_file).convert("RGB")
                 model = genai.GenerativeModel(ANALYSIS_MODEL)
@@ -279,7 +362,7 @@ with st.sidebar.form("new_char_form", clear_on_submit=True):
                 save_project()
                 st.rerun()
             except Exception as e:
-                st.error(e)
+                st.error(f"Ugh, error: {e}")
 
 # List Characters
 if st.session_state['roster']:
@@ -287,57 +370,58 @@ if st.session_state['roster']:
         c1, c2 = st.sidebar.columns([1, 2])
         c1.image(data['image'])
         c2.write(f"**{name}**")
-        if c2.button("Remove", key=f"del_{name}"):
-            with st.spinner("Removing..."):
+        if c2.button("Yeet", key=f"del_{name}"):
+            with st.spinner("Deleting existence..."):
                 del st.session_state['roster'][name]
                 save_project()
                 st.rerun()
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("Style Config")
+st.sidebar.subheader("🎨 Vibe Check (Styles)")
 
 tab1, tab2 = st.sidebar.tabs(["Sketch", "Render"])
 
 with tab1:
-    s_file = st.file_uploader("Sketch Ref", type=["jpg", "png"], key="s_up")
+    s_file = st.file_uploader("Sketch Vibe", type=["jpg", "png"], key="s_up")
     if s_file:
         s_img = Image.open(s_file).convert("RGB")
         st.image(s_img)
-        if st.button("Analyze Sketch Style"):
-            with st.spinner("Analyzing Sketch Style..."):
+        if st.button("Steal Sketch Style"):
+            with st.spinner(get_snarky_spinner()):
                 m = genai.GenerativeModel(ANALYSIS_MODEL)
                 st.session_state['sketch_style_dna'] = m.generate_content(["Describe art style.", s_img]).text
                 save_project()
-                st.success("Style Locked!")
+                st.success("Vibe Locked.")
 
 with tab2:
-    f_file = st.file_uploader("Render Ref", type=["jpg", "png"], key="f_up")
+    f_file = st.file_uploader("Render Vibe", type=["jpg", "png"], key="f_up")
     if f_file:
         f_img = Image.open(f_file).convert("RGB")
         st.image(f_img)
-        if st.button("Analyze Render Style"):
-            with st.spinner("Analyzing Render Style..."):
+        if st.button("Steal Render Style"):
+            with st.spinner(get_snarky_spinner()):
                 m = genai.GenerativeModel(ANALYSIS_MODEL)
                 st.session_state['final_style_dna'] = m.generate_content(["Describe art style.", f_img]).text
                 save_project()
-                st.success("Style Locked!")
+                st.success("Vibe Locked.")
 
 
 
-st.title("🎬 Storyboard Production")
+st.title("� Babaru's Factory of Questionable Decisions")
+st.caption("(I can't believe you're spending your free time doing this.)")
 
-tab_story, tab_free, tab_video = st.tabs(["Storyboard", "Free Render", "Video"])
+tab_story, tab_free, tab_video = st.tabs(["Storyboarder", "Free Style", "Video Playground"])
 
 with tab_story:
     if not st.session_state["shots"]:
-        st.info("Start by pasting your script below.")
+        st.info("Dump your 'movie script' below. I promise I won't laugh. (I will).")
 
-    with st.expander("Script Editor", expanded=not bool(st.session_state["shots"])):
-        script_text = st.text_area("Input Script", height=150)
+    with st.expander("Script Dumpster", expanded=not bool(st.session_state["shots"])):
+        script_text = st.text_area("Input Script", height=150, placeholder="INT. VOID - DAY\nBabaru sighs heavily.")
         
-        if st.button("Process Script"):
+        if st.button("Process My Garbage"):
             if script_text:
-                with st.spinner("Breaking down script into shots..."):
+                with st.spinner(get_snarky_spinner()):
                     try:
                         model = genai.GenerativeModel(ANALYSIS_MODEL, generation_config={"response_mime_type": "application/json"})
                         sys_p = """Convert to JSON list of shots (id, action, dialogue).
@@ -349,7 +433,7 @@ with tab_story:
                         save_project()
                         st.rerun()
                     except Exception as e:
-                        st.error(e)
+                        st.error(f"Your script broke me: {e}")
 
     # Shot Generation Controls
     if st.session_state['shots']:
@@ -364,7 +448,7 @@ with tab_story:
             has_finals = any('final' in st.session_state['generated_images'].get(i, {}) for i, _ in enumerate(st.session_state['shots']))
 
             # 1. Generate Sketches
-            if c2.button("1. Generate Sketches", type="primary", use_container_width=True):
+            if c2.button("1. Scribble (Sketches)", type="primary", use_container_width=True):
                 def sketch_task(idx, shot, mode, style, roster):
                     try:
                         inputs = [f"TASK: SKETCH. STYLE: {style}."]
@@ -389,7 +473,7 @@ with tab_story:
                     except Exception as e:
                         return idx, None, str(e)
 
-                with st.spinner("Generating Sketches..."):
+                with st.spinner(get_snarky_spinner()):
                     style = st.session_state.get('sketch_style_dna', "Blue pencil sketch.")
                     roster = st.session_state.get('roster', {})
                     
@@ -403,12 +487,12 @@ with tab_story:
                                 st.session_state['generated_images'][i]['draft'] = img
                     
                     save_project()
-                    st.toast("✅ Batch Sketches Complete!", icon="✏️")
+                    st.toast("I scribbled some things.", icon="✏️")
                     time.sleep(1)
                     st.rerun()
 
-            # 2. Generate Renders (Disabled if no sketches)
-            if c3.button("2. Generate Renders", type="primary", use_container_width=True, disabled=not has_sketches):
+            # 2. Generate Renders
+            if c3.button("2. ✨ Do The Thing (Render)", type="primary", use_container_width=True, disabled=not has_sketches):
                 def render_task(idx, shot, mode, style, roster, current):
                     try:
                         inputs = [f"TASK: RENDER. STYLE: {style}."]
@@ -437,7 +521,7 @@ with tab_story:
                     except Exception as e:
                         return idx, None, str(e)
                 
-                with st.spinner("Rendering Finals..."):
+                with st.spinner(get_snarky_spinner()):
                     style = st.session_state.get('final_style_dna', "3D High Fidelity.")
                     roster = st.session_state.get('roster', {})
                     current = st.session_state['generated_images']
@@ -452,12 +536,12 @@ with tab_story:
                                 st.session_state['generated_images'][i]['final'] = img
                     
                     save_project()
-                    st.toast("✅ Batch Renders Complete!", icon="🎨")
+                    st.toast("It's done. Try not to cry.", icon="✨")
                     time.sleep(1)
                     st.rerun()
 
-            # 3. Generate Videos (Disabled if no renders)
-            if c4.button("3. Generate Videos", type="primary", use_container_width=True, disabled=not has_finals):
+            # 3. Generate Videos
+            if c4.button("3. 🎥 Burn My Battery", type="primary", use_container_width=True, disabled=not has_finals):
                 def generate_single_video(idx, shot):
                     try:
                         # 1. Get Image
@@ -486,12 +570,12 @@ with tab_story:
                     except Exception as e:
                         return idx, None, str(e)
 
-                with st.spinner("Generating Videos... (Processing valid renders only)"):
+                with st.spinner(get_snarky_spinner()):
                     valid_indices = [i for i, _ in enumerate(st.session_state['shots']) 
                                      if 'final' in st.session_state['generated_images'].get(i, {})]
                     
                     if not valid_indices:
-                        st.warning("No Final Renders found to animate.")
+                        st.warning("No Renders found. Do step 2 first.")
                     else:
                         with ThreadPoolExecutor(max_workers=2) as exe:
                             futures = [exe.submit(generate_single_video, i, st.session_state['shots'][i]) for i in valid_indices]
@@ -502,17 +586,17 @@ with tab_story:
                                         st.session_state['generated_videos'][i] = {}
                                     st.session_state['generated_videos'][i] = vid_uri
                                 elif err:
-                                    st.error(f"Shot {i+1}: {err}")
+                                    st.error(f"Shot {i+1} Failed: {err}")
                         
                         save_project()
-                        st.toast("✅ Batch Videos Complete!", icon="🎥")
+                        st.toast("Videos served hot.", icon="🎥")
                         time.sleep(1)
                         st.rerun()
 
         st.divider()
 
         # Bulk Export Section
-        with st.expander("📂 Bulk Exports (ZIP/Links)", expanded=False):
+        with st.expander("📂 Loot Bag (Exports)", expanded=False):
             exp_c1, exp_c2, exp_c3 = st.columns(3)
             
             # Helper for Images
@@ -536,30 +620,30 @@ with tab_story:
             zip_sketches = create_zip('draft')
             if zip_sketches:
                 exp_c1.download_button(
-                    "📦 All Sketches (.zip)", 
+                    "📦 Steal Sketches (.zip)", 
                     data=zip_sketches, 
                     file_name="sketches.zip", 
                     mime="application/zip"
                 )
             else:
-                exp_c1.button("📦 All Sketches", disabled=True)
+                exp_c1.button("📦 Steal Sketches", disabled=True)
 
             # 2. Renders
             zip_finals = create_zip('final')
             if zip_finals:
                 exp_c2.download_button(
-                    "📦 All Renders (.zip)", 
+                    "📦 Steal Renders (.zip)", 
                     data=zip_finals, 
                     file_name="renders.zip", 
                     mime="application/zip"
                 )
             else:
-                exp_c2.button("📦 All Renders", disabled=True)
+                exp_c2.button("📦 Steal Renders", disabled=True)
 
             # 3. Videos (HTML Playlist)
             def create_video_list():
                 if not st.session_state['generated_videos']: return None
-                html = "<html><body><h1>Generated Videos</h1><ul>"
+                html = "<html><body><h1>Babaru's Factory Output</h1><ul>"
                 for i, uri in st.session_state['generated_videos'].items():
                     html += f"<li><h3>Shot {int(i)+1}</h3><a href='{uri}'>Download Video Link</a><br><video width='320' height='240' controls><source src='{uri}' type='video/mp4'></video></li>"
                 html += "</ul></body></html>"
@@ -568,14 +652,13 @@ with tab_story:
             vid_list = create_video_list()
             if vid_list:
                 exp_c3.download_button(
-                    "🔗 All Videos (Playlist)", 
+                    "🔗 Steal Videos (Playlist)", 
                     data=vid_list, 
                     file_name="video_playlist.html", 
                     mime="text/html",
-                    help="Downloads an HTML file with links to all your generated videos."
                 )
             else:
-                 exp_c3.button("🔗 All Videos", disabled=True)
+                 exp_c3.button("🔗 Steal Videos", disabled=True)
         
         st.divider()
         # ---------------------------------------------------------
@@ -600,8 +683,8 @@ with tab_story:
 
             with c2:
                 # Draft Button
-                if st.button("Draft", key=f"draft_{i}"):
-                    with st.spinner("Sketching..."):
+                if st.button("✏️", key=f"draft_{i}", help="Draft this shot"):
+                    with st.spinner(get_snarky_spinner()):
                         try:
                             style = st.session_state.get('sketch_style_dna', "Blue pencil sketch.")
                             inputs = [f"TASK: SKETCH. STYLE: {style}."]
@@ -629,8 +712,8 @@ with tab_story:
                             st.error(e)
 
                 # Final Button
-                if st.button("Final", key=f"final_{i}"):
-                    with st.spinner("Rendering..."):
+                if st.button("🎨", key=f"final_{i}", help="Render this shot"):
+                    with st.spinner(get_snarky_spinner()):
                         try:
                             style = st.session_state.get('final_style_dna', "3D High Fidelity.")
                             inputs = [f"TASK: RENDER. STYLE: {style}."]
@@ -663,15 +746,15 @@ with tab_story:
                         except Exception as e:
                             st.error(e)
 
-                if st.button("Video", key=f"vid_{i}"):
+                if st.button("🎥", key=f"vid_{i}", help="Animate this shot"):
                     # Single Video Generation Logic
                     data = st.session_state['generated_images'].get(i, {})
                     final_img = data.get('final')
                     
                     if not final_img:
-                        st.warning("Generate Final Render first!")
+                        st.warning("Render first, darling.")
                     else:
-                        with st.spinner("Generating Video..."):
+                        with st.spinner(get_snarky_spinner()):
                             try:
                                 prompt_text = f"Cinematic movement. {shot.get('action', '')}"
                                 client, operation = start_veo_job(prompt_text, final_img)
@@ -688,9 +771,9 @@ with tab_story:
                                     save_project()
                                     st.rerun()
                                 elif operation.result and getattr(operation.result, 'rai_media_filtered_reasons', None):
-                                    st.warning(f"Video Blocked by Safety Filter: {operation.result.rai_media_filtered_reasons[0]}")
+                                    st.warning(f"Video Blocked: {operation.result.rai_media_filtered_reasons[0]}")
                                 else:
-                                    st.error(f"Failed. Res: {operation.result} | Err: {getattr(operation, 'error', 'None')}")
+                                    st.error(f"Failed. Res: {operation.result}")
                             except Exception as e:
                                 st.error(str(e))
 
@@ -706,44 +789,43 @@ with tab_story:
                         st.image(data['draft'])
                         buf = io.BytesIO()
                         data['draft'].save(buf, format="PNG")
-                        st.download_button("Download", data=buf.getvalue(), file_name=f"s{i}_draft.png", key=f"dl_d_{i}")
+                        st.download_button("💾", data=buf.getvalue(), file_name=f"s{i}_draft.png", key=f"dl_d_{i}")
                 
                 with t2:
                     if 'final' in data:
                         st.image(data['final'])
                         buf = io.BytesIO()
                         data['final'].save(buf, format="PNG")
-                        st.download_button("Download", data=buf.getvalue(), file_name=f"s{i}_final.png", key=f"dl_f_{i}")
+                        st.download_button("💾", data=buf.getvalue(), file_name=f"s{i}_final.png", key=f"dl_f_{i}")
                 
                 with t3:
                     vid_uri = st.session_state.get('generated_videos', {}).get(i)
                     if vid_uri:
                         st.video(vid_uri)
-                        st.caption("Right click > Save Video to download")
                     else:
-                        st.caption("No video generated yet.")
+                        st.caption("Nothing here yet.")
             
             st.divider()
 
 # Free Render Tab
 with tab_free:
-    st.header("🎨 Free Render Mode")
+    st.header("🎨 Free Render (Do whatever)")
     
     col1, col2 = st.columns(2)
     
     with col1:
-        up_file = st.file_uploader("Upload Layout", type=["jpg", "png"], key="free_up")
+        up_file = st.file_uploader("Upload the Vibe (Layout)", type=["jpg", "png"], key="free_up")
         
         active_cast = list(st.session_state['roster'].keys())
-        selected = st.multiselect("Active Cast", active_cast, default=active_cast, key="free_cast")
+        selected = st.multiselect("Cast", active_cast, default=active_cast, key="free_cast")
         
-        prompt = st.text_area("Description")
+        prompt = st.text_area("Describe the hallucinations")
         
-        if st.button("Render", type="primary"):
+        if st.button("✨ Do The Thing", type="primary"):
             if not up_file:
                 st.warning("Upload sketch first.")
             else:
-                with st.spinner("Rendering..."):
+                with st.spinner(get_snarky_spinner()):
                     try:
                         img_in = Image.open(up_file).convert("RGB")
                         style = st.session_state.get('final_style_dna', "High Fidelity")
@@ -779,23 +861,21 @@ with tab_free:
         if st.session_state.get('free_render'):
             st.image(st.session_state['free_render'])
             
-    # Video Section Placeholder (Simplified)
     st.divider()
-    st.caption("Video Tools (Coming Soon)")
 
 # Free Video Playground
 with tab_video:
-    st.header("🎥 Free Video Playground")
-    st.caption("Experiment with Text-to-Video and Image-to-Video generation using Veo.")
+    st.header("🎥 Burn My Battery (Video)")
+    st.caption("Experiment with Veo. If it breaks, it's a 'feature'.")
     
     col1, col2 = st.columns([1, 1])
     
     with col1:
         v_prompt = st.text_area("Video Prompt", "A cinematic drone shot of a futuristic city...", height=100)
-        v_img = st.file_uploader("Reference Image (Optional)", type=["jpg", "png", "jpeg"], key="vid_k")
+        v_img = st.file_uploader("Ref Image (Optional)", type=["jpg", "png", "jpeg"], key="vid_k")
         
-        if st.button("Generate Video", type="primary", key="gen_free_vid"):
-            with st.spinner("Generating Video... (Approx. 1-2 mins)"):
+        if st.button("✨ Make It Move", type="primary", key="gen_free_vid"):
+            with st.spinner(get_snarky_spinner()):
                 try:
                     pil_img = None
                     if v_img:
@@ -814,7 +894,7 @@ with tab_video:
                         st.session_state['free_video'] = uri
                         save_project()
                     elif operation.result and getattr(operation.result, 'rai_media_filtered_reasons', None):
-                        st.warning(f"Video Blocked by Safety Filter: {operation.result.rai_media_filtered_reasons[0]}")
+                        st.warning(f"Video Blocked: {operation.result.rai_media_filtered_reasons[0]}")
                     else:
                         st.error(f"Failed. Res: {operation.result} | Err: {getattr(operation, 'error', 'None')}")
                         
@@ -827,3 +907,6 @@ with tab_video:
             st.video(st.session_state['free_video'])
         else:
             st.info("Result will appear here.")
+
+st.markdown("---")
+st.markdown(f"<div style='text-align: center; color: #6a0dad;'><i>{random.choice(FOOTER_QUOTES)}</i></div>", unsafe_allow_html=True)

@@ -559,8 +559,11 @@ with tab_story:
                                 return idx, None, "No final render passed.", None
 
                             # Determination of Model
-                            shot_model = shot.get('video_model', 'Global Default')
-                            active_model = global_model_name if shot_model == "Global Default" else shot_model
+                            shot_model = shot.get('video_model', 'Use Batch Setting')
+                            # Handle legacy
+                            if shot_model == "Global Default": shot_model = "Use Batch Setting"
+                            
+                            active_model = global_model_name if shot_model == "Use Batch Setting" else shot_model
 
                             base_prompt = shot.get('visual_prompt', shot.get('action', ''))
                             prompt_text = f"Cinematic movement. {base_prompt}"
@@ -730,8 +733,14 @@ with tab_story:
                         st.session_state['shots'][i]['video_model'] = st.session_state[f"v_mod_{i}"]
                         save_project()
                         
-                    curr_v_mod = shot.get('video_model', "Global Default")
-                    st.selectbox("Video Model", ["Global Default", "Google Veo", "Kling 2.6 (FAL)"], index=["Global Default", "Google Veo", "Kling 2.6 (FAL)"].index(curr_v_mod) if curr_v_mod in ["Global Default", "Google Veo", "Kling 2.6 (FAL)"] else 0, key=f"v_mod_{i}", on_change=update_v_model)
+                    curr_v_mod = shot.get('video_model', "Use Batch Setting")
+                    # Handle legacy "Global Default" if present in state
+                    if curr_v_mod == "Global Default": curr_v_mod = "Use Batch Setting"
+                    
+                    opts = ["Use Batch Setting", "Google Veo", "Kling 2.6 (FAL)"]
+                    idx = opts.index(curr_v_mod) if curr_v_mod in opts else 0
+                    
+                    st.selectbox("Video Model", opts, index=idx, key=f"v_mod_{i}", on_change=update_v_model)
                 # Note: 'selected' var removed as we save directly to state via callback
 
             with c2:
@@ -818,8 +827,10 @@ with tab_story:
                         with st.spinner("Generating Video..."):
                             try:
                                 global_sel = st.session_state.get('video_model_choice', "Google Veo")
-                                shot_model = shot.get('video_model', "Global Default")
-                                active_model = global_sel if shot_model == "Global Default" else shot_model
+                                shot_model = shot.get('video_model', "Use Batch Setting")
+                                if shot_model == "Global Default": shot_model = "Use Batch Setting" # Legacy fix
+                                
+                                active_model = global_sel if shot_model == "Use Batch Setting" else shot_model
                                 
                                 prompt_text = f"Cinematic movement. {shot.get('action', '')}"
                                 

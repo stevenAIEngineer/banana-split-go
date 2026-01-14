@@ -3,3 +3,4 @@ google-generativeai
 google-genai
 python-dotenv
 Pillow
+fal-client

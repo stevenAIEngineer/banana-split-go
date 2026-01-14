@@ -18,6 +18,8 @@ import asyncio
 import uuid
 import zipfile
 import requests
+import fal_client
+import base64
 from concurrent.futures import ThreadPoolExecutor
 
 # Constants
@@ -177,6 +179,46 @@ def start_veo_job(prompt, image_input=None):
     
     # Failure
     raise Exception(f"Veo start failed. Auth methods tried: {errors}")
+
+def img_to_data_uri(image):
+    """Converts PIL Image to Base64 Data URI."""
+    if not isinstance(image, Image.Image):
+        return None
+    curr_buf = io.BytesIO()
+    image.save(curr_buf, format="PNG")
+    curr_buf.seek(0)
+    data = base64.b64encode(curr_buf.read()).decode("utf-8")
+    return f"data:image/png;base64,{data}"
+
+def start_kling_job(prompt, image_input):
+    """
+    Submits a job to Kling 2.6 via FAL API.
+    Returns: (None, result_url) to distinguish from Veo's (client, op).
+    """
+    data_uri = img_to_data_uri(image_input)
+    if not data_uri:
+        raise ValueError("Invalid Image Input for Kling")
+
+    if "FAL_KEY" not in os.environ:
+        load_dotenv()
+        if "FAL_KEY" not in os.environ:
+            raise ValueError("FAL_KEY not set in environment.")
+
+    result = fal_client.subscribe(
+        "fal-ai/kling-video/v2.6/pro/image-to-video",
+        arguments={
+            "prompt": prompt,
+            "start_image_url": data_uri,
+            "duration": "5",
+            "generate_audio": True 
+        },
+        with_logs=True
+    )
+    
+    if 'video' in result and 'url' in result['video']:
+        return None, result['video']['url']
+    
+    raise Exception(f"Kling Generation Failed: {result}")
 
 # Initialize Session State
 defaults = {
@@ -396,7 +438,9 @@ with tab_story:
                 inj_final = st.checkbox("Inject Cast", value=True, key="batch_inj_r")
             with c_cfg3:
                 st.markdown("**3. Video Settings**")
-                st.caption("Auto-animate Finals")
+                # Model Selector
+                model_choice = st.radio("Model", ["Google Veo", "Kling 2.6 (FAL)"], key="video_model_choice", label_visibility="collapsed")
+                st.caption(f"Using: {model_choice}")
 
             # --- ROW 2: Actions ---
             col_draft, col_render, col_video = st.columns(3)
@@ -509,34 +553,43 @@ with tab_story:
             # --- 3. Generate Videos ---
             with col_video:
                 if st.button("🎥 Generate Videos", type="primary", use_container_width=True, disabled=not has_finals):
-                    def generate_single_video(idx, shot, final_img):
+                    def generate_single_video(idx, shot, final_img, global_model_name):
                         try:
                             if not final_img:
-                                return idx, None, "No final render passed."
+                                return idx, None, "No final render passed.", None
 
-                            # Use optimized visual prompt if available
+                            # Determination of Model
+                            shot_model = shot.get('video_model', 'Global Default')
+                            active_model = global_model_name if shot_model == "Global Default" else shot_model
+
                             base_prompt = shot.get('visual_prompt', shot.get('action', ''))
                             prompt_text = f"Cinematic movement. {base_prompt}"
                             
-                            client, operation = start_veo_job(prompt_text, final_img)
-                            
-                            while not operation.done:
-                                time.sleep(10)
-                                operation = client.operations.get(operation)
+                            if active_model == "Google Veo":
+                                client, operation = start_veo_job(prompt_text, final_img)
+                                while not operation.done:
+                                    time.sleep(10)
+                                    operation = client.operations.get(operation)
                                 
-                            if operation.result and operation.result.generated_videos:
-                                return idx, download_video(operation.result.generated_videos[0].video.uri), None
+                                if operation.result and operation.result.generated_videos:
+                                    return idx, download_video(operation.result.generated_videos[0].video.uri), None, active_model
+                                
+                                if getattr(operation.result, 'rai_media_filtered_reasons', None):
+                                    return idx, None, f"Blocked: {operation.result.rai_media_filtered_reasons[0]}", active_model
+                                return idx, None, f"No video. Res: {operation.result} Err: {getattr(operation, 'error', 'None')}", active_model
                             
-                            if getattr(operation.result, 'rai_media_filtered_reasons', None):
-                                return idx, None, f"Blocked: {operation.result.rai_media_filtered_reasons[0]}"
-
-                            return idx, None, f"No video. Res: {operation.result} Err: {getattr(operation, 'error', 'None')}"
+                            elif active_model == "Kling 2.6 (FAL)":
+                                # Kling returns URL directly (blocking call in start_kling_job)
+                                _, vid_url = start_kling_job(prompt_text, final_img)
+                                return idx, vid_url, None, active_model
+                            
+                            else:
+                                return idx, None, f"Unknown Model: {active_model}", None
 
                         except Exception as e:
-                            return idx, None, str(e)
+                            return idx, None, str(e), None
 
-                    with st.spinner("Generating Videos... (Processing valid renders only)"):
-                        # Pre-calculate inputs in main thread to avoid thread-safety issues
+                    with st.spinner(f"Generating Videos..."):
                         tasks = []
                         for i, _ in enumerate(st.session_state['shots']):
                              data = st.session_state['generated_images'].get(i, {})
@@ -547,15 +600,26 @@ with tab_story:
                             st.warning("No Final Renders found to animate.")
                         else:
                             with ThreadPoolExecutor(max_workers=2) as exe:
-                                futures = [exe.submit(generate_single_video, i, s, img) for i, s, img in tasks]
+                                # Pass global_model_choice to allow fallback
+                                futures = [exe.submit(generate_single_video, i, s, img, model_choice) for i, s, img in tasks]
                                 for f in futures:
-                                    i, vid_uri, err = f.result()
+                                    i, vid_uri, err, used_model = f.result()
                                     if vid_uri:
                                         if i not in st.session_state['generated_videos']:
                                             st.session_state['generated_videos'][i] = {}
                                         st.session_state['generated_videos'][i] = vid_uri
+                                        
+                                        # Save Metadata
+                                        if 'video_meta' not in st.session_state: st.session_state['video_meta'] = {}
+                                        st.session_state['video_meta'][i] = {'model': used_model}
+                                        
                                     elif err:
                                         st.error(f"Shot {i+1}: {err}")
+                            
+                            save_project()
+                            st.toast("✅ Batch Videos Complete!", icon="🎥")
+                            time.sleep(1)
+                            st.rerun()
                             
                             save_project()
                             st.toast("✅ Batch Videos Complete!", icon="🎥")
@@ -654,12 +718,20 @@ with tab_story:
                     st.session_state['shots'][i]['active_cast'] = st.session_state[f"cast_{i}"]
                     save_project()
 
-                # Default to ALL if not set, or load existing
                 items_to_select = shot.get('active_cast', all_cast)
-                # Filter out any deleted characters to prevent errors
                 valid_defaults = [x for x in items_to_select if x in all_cast]
                 
-                st.multiselect("Active Cast", all_cast, default=valid_defaults, key=f"cast_{i}", on_change=update_cast)
+                c_shot_1, c_shot_2 = st.columns(2)
+                with c_shot_1:
+                    st.multiselect("Active Cast", all_cast, default=valid_defaults, key=f"cast_{i}", on_change=update_cast)
+                with c_shot_2:
+                    # Per-Shot Video Model
+                    def update_v_model():
+                        st.session_state['shots'][i]['video_model'] = st.session_state[f"v_mod_{i}"]
+                        save_project()
+                        
+                    curr_v_mod = shot.get('video_model', "Global Default")
+                    st.selectbox("Video Model", ["Global Default", "Google Veo", "Kling 2.6 (FAL)"], index=["Global Default", "Google Veo", "Kling 2.6 (FAL)"].index(curr_v_mod) if curr_v_mod in ["Global Default", "Google Veo", "Kling 2.6 (FAL)"] else 0, key=f"v_mod_{i}", on_change=update_v_model)
                 # Note: 'selected' var removed as we save directly to state via callback
 
             with c2:
@@ -745,24 +817,42 @@ with tab_story:
                     else:
                         with st.spinner("Generating Video..."):
                             try:
+                                global_sel = st.session_state.get('video_model_choice', "Google Veo")
+                                shot_model = shot.get('video_model', "Global Default")
+                                active_model = global_sel if shot_model == "Global Default" else shot_model
+                                
                                 prompt_text = f"Cinematic movement. {shot.get('action', '')}"
-                                client, operation = start_veo_job(prompt_text, final_img)
                                 
-                                while not operation.done:
-                                    time.sleep(10)
-                                    operation = client.operations.get(operation)
-                                
-                                if operation.result and operation.result.generated_videos:
-                                    vid_uri = download_video(operation.result.generated_videos[0].video.uri)
+                                final_vid_uri = None
+                                used_model_name = active_model
+
+                                if active_model == "Kling 2.6 (FAL)":
+                                    _, final_vid_uri = start_kling_job(prompt_text, final_img)
+                                else:
+                                    # Default Veo
+                                    client, operation = start_veo_job(prompt_text, final_img)
+                                    while not operation.done:
+                                        time.sleep(10)
+                                        operation = client.operations.get(operation)
+                                    
+                                    if operation.result and operation.result.generated_videos:
+                                        final_vid_uri = download_video(operation.result.generated_videos[0].video.uri)
+                                    elif operation.result and getattr(operation.result, 'rai_media_filtered_reasons', None):
+                                        st.warning(f"Video Blocked by Safety Filter: {operation.result.rai_media_filtered_reasons[0]}")
+                                    else:
+                                        st.error(f"Failed. Res: {operation.result} | Err: {getattr(operation, 'error', 'None')}")
+
+                                if final_vid_uri:
                                     if i not in st.session_state['generated_videos']:
                                         st.session_state['generated_videos'][i] = {}
-                                    st.session_state['generated_videos'][i] = vid_uri
+                                    st.session_state['generated_videos'][i] = final_vid_uri
+                                    
+                                    # Save Metadata
+                                    if 'video_meta' not in st.session_state: st.session_state['video_meta'] = {}
+                                    st.session_state['video_meta'][i] = {'model': used_model_name}
+
                                     save_project()
                                     st.rerun()
-                                elif operation.result and getattr(operation.result, 'rai_media_filtered_reasons', None):
-                                    st.warning(f"Video Blocked by Safety Filter: {operation.result.rai_media_filtered_reasons[0]}")
-                                else:
-                                    st.error(f"Failed. Res: {operation.result} | Err: {getattr(operation, 'error', 'None')}")
                             except Exception as e:
                                 st.error(str(e))
 
@@ -791,6 +881,12 @@ with tab_story:
                     vid_uri = st.session_state.get('generated_videos', {}).get(i)
                     if vid_uri:
                         st.video(vid_uri)
+                        
+                        # Show Model Metadata
+                        meta = st.session_state.get('video_meta', {}).get(i, {})
+                        if 'model' in meta:
+                            st.caption(f"Generated with: **{meta['model']}**")
+                        
                         st.caption("Right click > Save Video to download")
                     else:
                         st.caption("No video generated yet.")

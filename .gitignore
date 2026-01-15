@@ -2,3 +2,5 @@
 banana_state.pkl
 __pycache__/
 *.DS_Store
+
+sessions/

@@ -601,11 +601,6 @@ with tab_story:
                             st.toast("✅ Batch Videos Complete!", icon="🎥")
                             time.sleep(1)
                             st.rerun()
-                            
-                            save_project()
-                            st.toast("✅ Batch Videos Complete!", icon="🎥")
-                            time.sleep(1)
-                            st.rerun()
 
         st.divider()
 
@@ -799,25 +794,9 @@ with tab_story:
                                 prompt_text = f"Cinematic movement. {shot.get('action', '')}"
                                 
                                 final_vid_uri = None
-                                used_model_name = active_model
-
-                                if active_model == "Kling 2.6 (FAL)":
-                                    _, final_vid_uri = start_kling_job(prompt_text, final_img)
-                                elif active_model == "Google Veo":
-                                    # Default Veo
-                                    client, operation = start_veo_job(prompt_text, final_img)
-                                    while not operation.done:
-                                        time.sleep(10)
-                                        operation = client.operations.get(operation)
-                                    
-                                    if operation.result and operation.result.generated_videos:
-                                        final_vid_uri = download_video(operation.result.generated_videos[0].video.uri)
-                                    elif operation.result and getattr(operation.result, 'rai_media_filtered_reasons', None):
-                                        st.warning(f"Video Blocked by Safety Filter: {operation.result.rai_media_filtered_reasons[0]}")
-                                    else:
-                                        st.error(f"Failed. Res: {operation.result} | Err: {getattr(operation, 'error', 'None')}")
-                                else:
-                                    st.error(f"Unknown Model Code: {active_model}")
+                                # Start video job
+                                prompt_text = f"Cinematic movement. {shot.get('action', '')}"
+                                _, final_vid_uri = start_kling_job(prompt_text, final_img)
 
                                 if final_vid_uri:
                                     if i not in st.session_state['generated_videos']:

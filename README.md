@@ -33,6 +33,6 @@ A lightweight AI movie production dashboard built with Streamlit and Google Gemi
 ## Credits
 
 **Developed by:** Steven Lansangan  
-**Date:** 2025-12-29
+**Date:** Jan 2026
 
 ---

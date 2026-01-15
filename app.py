@@ -1,5 +1,8 @@
-# Banana Split Studio v1.6
-# Developed by: Steven Lansangan
+"""
+Banana Split Studio
+Author: Steven Lansangan
+Date: Jan 2026
+"""
 
 import warnings
 warnings.simplefilter(action='ignore', category=FutureWarning)
@@ -438,9 +441,7 @@ with tab_story:
                 inj_final = st.checkbox("Inject Cast", value=True, key="batch_inj_r")
             with c_cfg3:
                 st.markdown("**3. Video Settings**")
-                # Model Selector
-                model_choice = st.radio("Model", ["Google Veo", "Kling 2.6 (FAL)"], key="video_model_choice", label_visibility="collapsed")
-                st.caption(f"Using: {model_choice}")
+                st.caption("Default: HD Cinematic")
 
             # --- ROW 2: Actions ---
             col_draft, col_render, col_video = st.columns(3)
@@ -558,36 +559,13 @@ with tab_story:
                             if not final_img:
                                 return idx, None, "No final render passed.", None
 
-                            # Determination of Model
-                            shot_model = shot.get('video_model', 'Use Batch Setting')
-                            # Handle legacy
-                            if shot_model == "Global Default": shot_model = "Use Batch Setting"
-                            
-                            active_model = global_model_name if shot_model == "Use Batch Setting" else shot_model
-
+                            # Video Generation Logic
                             base_prompt = shot.get('visual_prompt', shot.get('action', ''))
                             prompt_text = f"Cinematic movement. {base_prompt}"
                             
-                            if active_model == "Google Veo":
-                                client, operation = start_veo_job(prompt_text, final_img)
-                                while not operation.done:
-                                    time.sleep(10)
-                                    operation = client.operations.get(operation)
-                                
-                                if operation.result and operation.result.generated_videos:
-                                    return idx, download_video(operation.result.generated_videos[0].video.uri), None, active_model
-                                
-                                if getattr(operation.result, 'rai_media_filtered_reasons', None):
-                                    return idx, None, f"Blocked: {operation.result.rai_media_filtered_reasons[0]}", active_model
-                                return idx, None, f"No video. Res: {operation.result} Err: {getattr(operation, 'error', 'None')}", active_model
-                            
-                            elif active_model == "Kling 2.6 (FAL)":
-                                # Kling returns URL directly (blocking call in start_kling_job)
-                                _, vid_url = start_kling_job(prompt_text, final_img)
-                                return idx, vid_url, None, active_model
-                            
-                            else:
-                                return idx, None, f"Unknown Model: {active_model}", None
+                            # Use high quality video model
+                            _, vid_url = start_kling_job(prompt_text, final_img)
+                            return idx, vid_url, None, "Default"
 
                         except Exception as e:
                             return idx, None, str(e), None
@@ -603,8 +581,8 @@ with tab_story:
                             st.warning("No Final Renders found to animate.")
                         else:
                             with ThreadPoolExecutor(max_workers=2) as exe:
-                                # Pass global_model_choice to allow fallback
-                                futures = [exe.submit(generate_single_video, i, s, img, model_choice) for i, s, img in tasks]
+                                # Internal Hardcode: "Kling 2.6 (FAL)"
+                                futures = [exe.submit(generate_single_video, i, s, img, "Kling 2.6 (FAL)") for i, s, img in tasks]
                                 for f in futures:
                                     i, vid_uri, err, used_model = f.result()
                                     if vid_uri:
@@ -728,19 +706,8 @@ with tab_story:
                 with c_shot_1:
                     st.multiselect("Active Cast", all_cast, default=valid_defaults, key=f"cast_{i}", on_change=update_cast)
                 with c_shot_2:
-                    # Per-Shot Video Model
-                    def update_v_model():
-                        st.session_state['shots'][i]['video_model'] = st.session_state[f"v_mod_{i}"]
-                        save_project()
-                        
-                    curr_v_mod = shot.get('video_model', "Use Batch Setting")
-                    # Handle legacy "Global Default" if present in state
-                    if curr_v_mod == "Global Default": curr_v_mod = "Use Batch Setting"
-                    
-                    opts = ["Use Batch Setting", "Google Veo", "Kling 2.6 (FAL)"]
-                    idx = opts.index(curr_v_mod) if curr_v_mod in opts else 0
-                    
-                    st.selectbox("Video Model", opts, index=idx, key=f"v_mod_{i}", on_change=update_v_model)
+                    # Video options reserved for future use
+                    pass
                 # Note: 'selected' var removed as we save directly to state via callback
 
             with c2:
@@ -826,11 +793,8 @@ with tab_story:
                     else:
                         with st.spinner("Generating Video..."):
                             try:
-                                global_sel = st.session_state.get('video_model_choice', "Google Veo")
-                                shot_model = shot.get('video_model', "Use Batch Setting")
-                                if shot_model == "Global Default": shot_model = "Use Batch Setting" # Legacy fix
-                                
-                                active_model = global_sel if shot_model == "Use Batch Setting" else shot_model
+                                # FORCE KLING DEFAULT
+                                active_model = "Kling 2.6 (FAL)"
                                 
                                 prompt_text = f"Cinematic movement. {shot.get('action', '')}"
                                 
@@ -839,7 +803,7 @@ with tab_story:
 
                                 if active_model == "Kling 2.6 (FAL)":
                                     _, final_vid_uri = start_kling_job(prompt_text, final_img)
-                                else:
+                                elif active_model == "Google Veo":
                                     # Default Veo
                                     client, operation = start_veo_job(prompt_text, final_img)
                                     while not operation.done:
@@ -852,6 +816,8 @@ with tab_story:
                                         st.warning(f"Video Blocked by Safety Filter: {operation.result.rai_media_filtered_reasons[0]}")
                                     else:
                                         st.error(f"Failed. Res: {operation.result} | Err: {getattr(operation, 'error', 'None')}")
+                                else:
+                                    st.error(f"Unknown Model Code: {active_model}")
 
                                 if final_vid_uri:
                                     if i not in st.session_state['generated_videos']:
@@ -893,10 +859,10 @@ with tab_story:
                     if vid_uri:
                         st.video(vid_uri)
                         
-                        # Show Model Metadata
-                        meta = st.session_state.get('video_meta', {}).get(i, {})
-                        if 'model' in meta:
-                            st.caption(f"Generated with: **{meta['model']}**")
+                        # Show Model Metadata (REMOVED per user request)
+                        # meta = st.session_state.get('video_meta', {}).get(i, {})
+                        # if 'model' in meta:
+                        #     st.caption(f"Generated with: **{meta['model']}**")
                         
                         st.caption("Right click > Save Video to download")
                     else:
